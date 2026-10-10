@@ -1,0 +1,9 @@
+services:
+  nginx-server:
+    image: custom-nginx-player:cache
+    container_name: nginx-server
+    restart: unless-stopped
+    ports:
+      - "81:80"
+    volumes:
+      - ./cache:/app/cache
