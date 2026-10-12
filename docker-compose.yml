@@ -1,9 +1,9 @@
 services:
   nginx-server:
-    image: custom-nginx-player:cache
+    image: ghcr.io/ogs60/nginx-server-player:latest
     container_name: nginx-server
     restart: unless-stopped
     ports:
-      - "81:80"
+      - "80:80"
     volumes:
       - ./cache:/app/cache
