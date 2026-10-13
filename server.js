@@ -274,8 +274,12 @@ function getHTMLContent(startTime, visitorCount, startDate) {
         </div>
         
         <div class="checkbox-label">
-          <input type="checkbox" id="loopToggle"> 
-          <label for="loopToggle">循环播放</label>
+          <input type="radio" name="playMode" id="loopToggle" value="list" checked>
+          <label for="loopToggle">列表播放</label>
+          <input type="radio" name="playMode" id="randomToggle" value="random">
+          <label for="randomToggle">随机播放</label>
+          <input type="radio" name="playMode" id="singleRepeatToggle" value="single">
+          <label for="singleRepeatToggle">单曲循环</label>
         </div>
         
         <div class="now-playing" id="nowPlaying">未加载媒体</div>
@@ -323,6 +327,8 @@ function getHTMLContent(startTime, visitorCount, startDate) {
     const progressText = document.getElementById('progressText');
     const playlist = document.getElementById('playlist');
     const loopToggle = document.getElementById('loopToggle');
+    const randomToggle = document.getElementById('randomToggle');
+    const singleRepeatToggle = document.getElementById('singleRepeatToggle');
     const loadBtn = document.getElementById('loadBtn');
     const urlInput = document.getElementById('urlInput');
     
@@ -404,7 +410,22 @@ function getHTMLContent(startTime, visitorCount, startDate) {
 
     function playNext() {
       if (!playlistItems.length) return;
-      playItem(currentIndex + 1);
+      if (singleRepeatToggle.checked && currentIndex >= 0) {
+        playItem(currentIndex);
+        return;
+      }
+      if (randomToggle.checked && playlistItems.length > 1) {
+        let nextIndex;
+        do { nextIndex = Math.floor(Math.random() * playlistItems.length); } while (nextIndex === currentIndex);
+        playItem(nextIndex);
+        return;
+      }
+      const nextIndex = currentIndex + 1;
+      if (nextIndex < playlistItems.length) {
+        playItem(nextIndex);
+      } else if (loopToggle.checked) {
+        playItem(0);
+      }
     }
 
     function addUrlToPlaylist(inputUrl) {
@@ -571,10 +592,15 @@ function getHTMLContent(startTime, visitorCount, startDate) {
     audioPlayer.addEventListener('ended', playNext);
     videoPlayer.addEventListener('ended', playNext);
 
-    loopToggle.addEventListener('change', function() {
+    singleRepeatToggle.addEventListener('change', function() {
       if (currentPlayer) currentPlayer.loop = false;
-      renderPlaylist();
     });
+
+    randomToggle.addEventListener('change', function() {
+      if (currentPlayer) currentPlayer.loop = false;
+    });
+
+
     
     switchPlayer('audio');
     loadCachedSongs();
