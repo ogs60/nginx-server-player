@@ -5,10 +5,19 @@ const path = require('path');
 const crypto = require('crypto');
 const { exec } = require('child_process');
 const { promisify } = require('util');
+const { PassThrough } = require('stream');
 
 const execFileAsync = promisify(require('child_process').execFile);
 const CACHE_DIR = process.env.CACHE_DIR || '/app/cache';
 const CACHE_META = path.join(CACHE_DIR, 'index.json');
+const YOUTUBE_PROXY = process.env.YOUTUBE_PROXY || '';
+if (YOUTUBE_PROXY) {
+  let proxyUrl;
+  try { proxyUrl = new URL(YOUTUBE_PROXY); } catch { throw new Error('YOUTUBE_PROXY 必须是完整地址，例如 http://192.168.8.100:1088'); }
+  if (!['http:', 'https:', 'socks5:', 'socks5h:'].includes(proxyUrl.protocol) || !proxyUrl.hostname || !proxyUrl.port) {
+    throw new Error('YOUTUBE_PROXY 必须包含协议、地址和端口，例如 http://192.168.8.100:1088');
+  }
+}
 const DOWNLOAD_PROGRESS = new Map();
 fs.mkdirSync(CACHE_DIR, { recursive: true });
 const startTime = Date.now();
@@ -24,6 +33,8 @@ const server = http.createServer((req, res) => {
     
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(htmlContent);
+  } else if (requestUrl.pathname === '/preload') {
+    handlePreload(requestUrl, req, res);
   } else if (requestUrl.pathname === '/yt-audio') {
     handleYouTubeAudio(requestUrl, req, res);
   } else if (requestUrl.pathname === '/media-proxy') {
@@ -412,12 +423,16 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       }
       urlInput.value = '';
       if (isYouTube(inputUrl)) {
+        const shouldPreload = currentIndex >= 0;
         const item = { type: 'audio', src: '/yt-audio?url=' + encodeURIComponent(inputUrl), name: inputUrl, url: inputUrl };
         addPlaylistItem(item);
         if (currentIndex < 0) playItem(0);
         else nowPlaying.textContent = '已加入播放列表: ' + inputUrl;
 
         startProgressPolling(item);
+        if (shouldPreload) {
+          fetch('/preload?url=' + encodeURIComponent(item.url)).then(response => response.arrayBuffer()).catch(() => {});
+        }
         fetch('/get-audio-url', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -570,13 +585,37 @@ function getHTMLContent(startTime, visitorCount, startDate) {
 </html>`;
 }
 
+let metadataWriteQueue = Promise.resolve();
+
 function readCacheMetadata() {
-  try { return JSON.parse(fs.readFileSync(CACHE_META, 'utf8')); } catch { return {}; }
+  try {
+    const value = JSON.parse(fs.readFileSync(CACHE_META, 'utf8'));
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  } catch {
+    return {};
+  }
 }
 
-function writeCacheMetadata(metadata) {
-  fs.writeFileSync(CACHE_META + '.tmp', JSON.stringify(metadata, null, 2));
-  fs.renameSync(CACHE_META + '.tmp', CACHE_META);
+function writeCacheMetadataEntry(key, value) {
+  metadataWriteQueue = metadataWriteQueue.then(() => {
+    const metadata = readCacheMetadata();
+    metadata[key] = { ...metadata[key], ...value };
+    const temp = CACHE_META + '.tmp';
+    fs.writeFileSync(temp, JSON.stringify(metadata, null, 2) + '\n');
+    fs.renameSync(temp, CACHE_META);
+  });
+  return metadataWriteQueue;
+}
+
+function deleteCacheMetadataEntry(key) {
+  metadataWriteQueue = metadataWriteQueue.then(() => {
+    const metadata = readCacheMetadata();
+    delete metadata[key];
+    const temp = CACHE_META + '.tmp';
+    fs.writeFileSync(temp, JSON.stringify(metadata, null, 2) + '\n');
+    fs.renameSync(temp, CACHE_META);
+  });
+  return metadataWriteQueue;
 }
 
 function handleCacheList(res) {
@@ -584,7 +623,7 @@ function handleCacheList(res) {
   const files = fs.readdirSync(CACHE_DIR).filter(file => /\.(mp3|wav|m4a|aac|ogg|flac|mp4|webm|mov)$/i.test(file));
   const items = files.map(file => {
     const key = file.replace(/\.[^.]+$/, '');
-    const item = metadata[key] || {};
+    const item = metadata[file] || metadata[key] || {};
     return {
       type: 'audio',
       src: '/cache-audio?file=' + encodeURIComponent(file),
@@ -605,11 +644,10 @@ function handleCacheMetadata(req, res) {
       const data = JSON.parse(body);
       if (!data.url || !data.title) throw new Error('invalid metadata');
       const key = crypto.createHash('sha256').update(data.url).digest('hex');
-      const metadata = readCacheMetadata();
-      metadata[key] = { url: data.url, title: data.title };
-      writeCacheMetadata(metadata);
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ success: true }));
+      writeCacheMetadataEntry(key, { url: data.url, title: data.title }).then(() => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+      });
     } catch (error) {
       res.writeHead(400);
       res.end(JSON.stringify({ success: false, error: error.message }));
@@ -640,12 +678,11 @@ function handleCacheUpload(req, res) {
       const key = crypto.createHash('sha256').update(originalName + ':' + body.slice(headerEnd + 4, end - 2)).digest('hex');
       const fileName = key + ext;
       fs.writeFileSync(path.join(CACHE_DIR, fileName), body.slice(headerEnd + 4, end - 2));
-      const metadata = readCacheMetadata();
-      metadata[key] = { title: originalName, local: true };
-      writeCacheMetadata(metadata);
-      const item = { type: ext === '.mp4' || ext === '.webm' || ext === '.mov' ? 'video' : 'audio', src: '/cache-audio?file=' + encodeURIComponent(fileName), name: originalName, cached: true, local: true };
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(item));
+      writeCacheMetadataEntry(key, { title: originalName, local: true }).then(() => {
+        const item = { type: ext === '.mp4' || ext === '.webm' || ext === '.mov' ? 'video' : 'audio', src: '/cache-audio?file=' + encodeURIComponent(fileName), name: originalName, cached: true, local: true };
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(item));
+      });
     } catch (error) { res.writeHead(400); res.end(error.message); }
   });
 }
@@ -659,11 +696,10 @@ function handleCacheDelete(req, res) {
       if (!/^[a-f0-9]{64}\.(mp3|wav|m4a|aac|ogg|flac|mp4|webm|mov)$/.test(file)) throw new Error('invalid cache file');
       const target = path.join(CACHE_DIR, file);
       if (fs.existsSync(target)) fs.unlinkSync(target);
-      const metadata = readCacheMetadata();
-      delete metadata[file.replace(/\.[^.]+$/, '')];
-      writeCacheMetadata(metadata);
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ success: true }));
+      deleteCacheMetadataEntry(file.replace(/\.[^.]+$/, '')).then(() => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+      });
     } catch (error) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: false, error: error.message }));
@@ -704,26 +740,27 @@ async function handleGetAudioUrl(req, res) {
     try {
       const data = JSON.parse(body);
       const inputUrl = data.url;
-      let title = inputUrl;
+      let title = '';
       try {
-        const { stdout } = await execFileAsync('yt-dlp', [
-          '--proxy', 'http://192.168.8.100:1088',
+        const ytArgs = [
           '--socket-timeout', '30',
           '--no-warnings',
           '--no-playlist',
           '--print', '%(title)s',
-          '--skip-download',
-          inputUrl
-        ], { timeout: 70000 });
-        title = stdout.trim().split('\n').filter(Boolean).pop() || inputUrl;
+          '--skip-download'
+        ];
+        if (YOUTUBE_PROXY) ytArgs.unshift('--proxy', YOUTUBE_PROXY);
+        ytArgs.push(inputUrl);
+        const { stdout } = await execFileAsync('yt-dlp', ytArgs, { timeout: 70000 });
+        title = stdout.trim().split('\n').filter(Boolean).pop() || '';
       } catch (e) {
-        console.warn('Title lookup failed, using URL:', e.message);
+        console.warn('Title lookup failed; metadata will be saved after a successful title lookup:', e.message);
       }
       const finalTitle = title.substring(0, 200);
-      const key = crypto.createHash('sha256').update(inputUrl).digest('hex');
-      const metadata = readCacheMetadata();
-      metadata[key] = { url: inputUrl, title: finalTitle };
-      writeCacheMetadata(metadata);
+      if (finalTitle) {
+        const key = crypto.createHash('sha256').update(inputUrl).digest('hex');
+        writeCacheMetadataEntry(key, { url: inputUrl, title: finalTitle });
+      }
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: true, title: finalTitle }));
     } catch (e) {
@@ -760,99 +797,98 @@ async function handleMediaProxy(url, req, res) {
   req.on('close', () => proxyReq.destroy());
 }
 
-async function handleYouTubeAudio(url, req, res) {
-  let inputUrl;
+function validateYouTubeUrl(inputUrl) {
   try {
-    inputUrl = url.searchParams.get('url');
     const parsedUrl = new URL(inputUrl);
-    const host = parsedUrl.hostname.toLowerCase();
-    if (!['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be', 'www.youtu.be'].includes(host)) throw new Error('unsupported host');
+    const allowed = ['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be', 'www.youtu.be'];
+    if (!allowed.includes(parsedUrl.hostname.toLowerCase())) throw new Error('unsupported host');
+    return true;
   } catch {
-    res.writeHead(400);
-    res.end('Invalid YouTube URL');
-    return;
+    return false;
   }
+}
 
+const DOWNLOAD_TASKS = new Map();
+
+function startDownload(inputUrl, key, cachePath) {
+  if (DOWNLOAD_TASKS.has(key)) return DOWNLOAD_TASKS.get(key);
+  const task = new Promise((resolve, reject) => {
+    const tempPath = cachePath + '.part';
+    try { fs.unlinkSync(tempPath); } catch {}
+    const { spawn } = require('child_process');
+    const ytArgs = ['--socket-timeout', '30', '--no-warnings', '--no-playlist', '-f', 'bestaudio', '-o', '-', inputUrl];
+    if (YOUTUBE_PROXY) ytArgs.unshift('--proxy', YOUTUBE_PROXY);
+    let attempts = 0;
+    const run = () => {
+      attempts++;
+      DOWNLOAD_PROGRESS.set(key, { status: 'loading', percent: 0, attempt: attempts });
+      const yt = spawn('yt-dlp', ytArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
+      const ffmpeg = spawn('ffmpeg', ['-i', 'pipe:0', '-f', 'mp3', '-q:a', '5', tempPath], { stdio: ['pipe', 'ignore', 'pipe'] });
+      const progressPattern = /\[download\]\s+(\d+(?:\.\d+)?)%/;
+      let ytFailed = false;
+      yt.stdout.pipe(ffmpeg.stdin);
+      yt.stderr.on('data', data => {
+        const text = data.toString();
+        const match = text.match(progressPattern);
+        if (match) DOWNLOAD_PROGRESS.set(key, { status: 'loading', percent: Number(match[1]), attempt: attempts });
+        if (/ERROR:|HTTP Error 403|unable to download video data/i.test(text)) ytFailed = true;
+        console.log('yt-dlp:', text.trim().slice(0, 300));
+      });
+      ffmpeg.stderr.on('data', data => console.log('FFmpeg:', data.toString().trim().slice(0, 300)));
+      yt.on('error', error => { ytFailed = true; console.error('yt-dlp error:', error.message); });
+      ffmpeg.on('error', error => console.error('FFmpeg error:', error.message));
+      ffmpeg.on('close', code => {
+        if (code === 0 && !ytFailed && fs.existsSync(tempPath) && fs.statSync(tempPath).size > 0) {
+          fs.rename(tempPath, cachePath, error => {
+            if (error) return reject(error);
+            writeCacheMetadataEntry(key, { url: inputUrl }).then(() => {
+              DOWNLOAD_PROGRESS.set(key, { status: 'complete', percent: 100 });
+              resolve(cachePath);
+            }).catch(reject);
+          });
+        } else if (attempts < 3) {
+          try { fs.unlinkSync(tempPath); } catch {}
+          setTimeout(run, attempts * 1000);
+        } else {
+          try { fs.unlinkSync(tempPath); } catch {}
+          DOWNLOAD_PROGRESS.set(key, { status: 'error', percent: 0, attempt: attempts });
+          reject(new Error('YouTube 音频下载失败，已重试 3 次'));
+        }
+      });
+    };
+    run();
+  }).finally(() => setTimeout(() => DOWNLOAD_TASKS.delete(key), 60000));
+  DOWNLOAD_TASKS.set(key, task);
+  return task;
+}
+
+function sendCachedAudio(cachePath, res) {
+  const stat = fs.statSync(cachePath);
+  res.writeHead(200, { 'Content-Type': 'audio/mpeg', 'Content-Length': stat.size, 'Cache-Control': 'public, max-age=31536000' });
+  fs.createReadStream(cachePath).pipe(res);
+}
+
+async function handlePreload(url, req, res) {
+  const inputUrl = url.searchParams.get('url') || '';
+  if (!validateYouTubeUrl(inputUrl)) { res.writeHead(400); res.end('Invalid YouTube URL'); return; }
   const key = crypto.createHash('sha256').update(inputUrl).digest('hex');
   const cachePath = path.join(CACHE_DIR, key + '.mp3');
-  if (fs.existsSync(cachePath) && fs.statSync(cachePath).size > 0) {
-    console.log('Playing cached audio:', key);
-    res.writeHead(200, {
-      'Content-Type': 'audio/mpeg',
-      'Content-Length': fs.statSync(cachePath).size,
-      'Cache-Control': 'public, max-age=31536000'
-    });
-    fs.createReadStream(cachePath).pipe(res);
-    return;
+  if (!fs.existsSync(cachePath)) startDownload(inputUrl, key, cachePath).catch(error => console.error('Preload failed:', error.message));
+  res.writeHead(202, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ accepted: true, key }));
+}
+
+async function handleYouTubeAudio(url, req, res) {
+  const inputUrl = url.searchParams.get('url') || '';
+  if (!validateYouTubeUrl(inputUrl)) { res.writeHead(400); res.end('Invalid YouTube URL'); return; }
+  const key = crypto.createHash('sha256').update(inputUrl).digest('hex');
+  const cachePath = path.join(CACHE_DIR, key + '.mp3');
+  try {
+    if (!fs.existsSync(cachePath)) await startDownload(inputUrl, key, cachePath);
+    sendCachedAudio(cachePath, res);
+  } catch (error) {
+    if (!res.headersSent) { res.writeHead(502); res.end(error.message); }
   }
-
-  const tempPath = cachePath + '.part';
-  const { spawn } = require('child_process');
-  const proxy = 'http://192.168.8.100:1088';
-  const yt = spawn('yt-dlp', [
-    '--proxy', proxy,
-    '--socket-timeout', '30',
-    '--no-warnings',
-    '--no-playlist',
-    '-f', 'bestaudio',
-    '-o', '-',
-    inputUrl
-  ], { stdio: ['ignore', 'pipe', 'pipe'] });
-  const ffmpeg = spawn('ffmpeg', [
-    '-i', 'pipe:0',
-    '-f', 'mp3',
-    '-q:a', '5',
-    tempPath
-  ], { stdio: ['pipe', 'ignore', 'pipe'] });
-
-  let started = false;
-  const sendCache = () => {
-    if (started || !fs.existsSync(tempPath)) return;
-    started = true;
-    fs.rename(tempPath, cachePath, error => {
-      if (error) {
-        console.error('Cache rename error:', error.message);
-        return;
-      }
-      const metadata = readCacheMetadata();
-      if (!metadata[key]) {
-        metadata[key] = { url: inputUrl, title: inputUrl };
-        writeCacheMetadata(metadata);
-      }
-      const stat = fs.statSync(cachePath);
-      res.writeHead(200, {
-        'Content-Type': 'audio/mpeg',
-        'Content-Length': stat.size,
-        'Cache-Control': 'public, max-age=31536000'
-      });
-      fs.createReadStream(cachePath).pipe(res);
-    });
-  };
-
-  DOWNLOAD_PROGRESS.set(key, { status: 'loading', percent: 0 });
-  const progressPattern = /\[download\]\s+(\d+(?:\.\d+)?)%/;
-  yt.stdout.pipe(ffmpeg.stdin);
-  yt.stderr.on('data', data => {
-    const text = data.toString();
-    const match = text.match(progressPattern);
-    if (match) DOWNLOAD_PROGRESS.set(key, { status: 'loading', percent: Number(match[1]) });
-    console.log('yt-dlp:', text.trim().slice(0, 300));
-  });
-  ffmpeg.stderr.on('data', data => console.log('FFmpeg:', data.toString().trim().slice(0, 300)));
-  yt.on('error', error => console.error('yt-dlp error:', error.message));
-  ffmpeg.on('error', error => console.error('FFmpeg error:', error.message));
-  ffmpeg.on('close', code => {
-    if (code === 0) {
-      DOWNLOAD_PROGRESS.set(key, { status: 'complete', percent: 100 });
-      sendCache();
-      setTimeout(() => DOWNLOAD_PROGRESS.delete(key), 60000);
-    } else {
-      DOWNLOAD_PROGRESS.set(key, { status: 'error', percent: 0 });
-      try { fs.unlinkSync(tempPath); } catch {}
-      if (!res.headersSent) { res.writeHead(502); res.end('Audio conversion failed'); }
-    }
-  });
-  req.on('close', () => { yt.kill('SIGTERM'); ffmpeg.kill('SIGTERM'); });
 }
 
 server.listen(80, () => {

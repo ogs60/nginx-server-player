@@ -5,5 +5,7 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
+    environment:
+      YOUTUBE_PROXY: ${YOUTUBE_PROXY:-}
     volumes:
       - ./cache:/app/cache
