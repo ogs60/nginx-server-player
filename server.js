@@ -625,7 +625,9 @@ function readCacheMetadata() {
 function writeCacheMetadataEntry(key, value) {
   metadataWriteQueue = metadataWriteQueue.then(() => {
     const metadata = readCacheMetadata();
-    metadata[key] = { ...metadata[key], ...value };
+    const existing = metadata[key] || {};
+    const nextOrder = Object.values(metadata).reduce((max, item) => Math.max(max, Number(item.order) || 0), 0) + 1;
+    metadata[key] = { ...existing, ...value, order: existing.order || nextOrder };
     const temp = CACHE_META + '.tmp';
     fs.writeFileSync(temp, JSON.stringify(metadata, null, 2) + '\n');
     fs.renameSync(temp, CACHE_META);
@@ -652,6 +654,7 @@ function handleCacheList(res) {
     const item = metadata[file] || metadata[key] || {};
     const isVideo = /\.(mp4|webm|mov)$/i.test(file);
     return {
+      order: Number(item.order) || 999999,
       type: isVideo ? 'video' : 'audio',
       src: '/cache-audio?file=' + encodeURIComponent(file),
       name: item.title || '缓存歌曲 ' + key.slice(0, 8),
@@ -659,7 +662,7 @@ function handleCacheList(res) {
       cached: true,
       local: Boolean(item.local)
     };
-  });
+  }).sort((a, b) => a.order - b.order);
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(items));
 }
