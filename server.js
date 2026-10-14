@@ -625,9 +625,20 @@ function readCacheMetadata() {
 function writeCacheMetadataEntry(key, value) {
   metadataWriteQueue = metadataWriteQueue.then(() => {
     const metadata = readCacheMetadata();
+    let maxOrder = Object.values(metadata).reduce((max, item) => Math.max(max, Number(item.order) || 0), 0);
+
+    for (const item of Object.values(metadata)) {
+      if (!Number.isInteger(Number(item.order)) || Number(item.order) < 1) {
+        item.order = ++maxOrder;
+      } else {
+        item.order = Number(item.order);
+      }
+    }
+
     const existing = metadata[key] || {};
-    const nextOrder = Object.values(metadata).reduce((max, item) => Math.max(max, Number(item.order) || 0), 0) + 1;
-    metadata[key] = { ...existing, ...value, order: existing.order || nextOrder };
+    if (!existing.order) existing.order = ++maxOrder;
+    metadata[key] = { ...existing, ...value, order: existing.order };
+
     const temp = CACHE_META + '.tmp';
     fs.writeFileSync(temp, JSON.stringify(metadata, null, 2) + '\n');
     fs.renameSync(temp, CACHE_META);
