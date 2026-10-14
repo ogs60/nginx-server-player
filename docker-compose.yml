@@ -8,4 +8,4 @@ services:
     environment:
       YOUTUBE_PROXY: ${YOUTUBE_PROXY:-}
     volumes:
-      - ./cache:/app/cache
+      - ${CACHE_DIR:-./cache}:/app/cache
