@@ -650,12 +650,14 @@ function handleCacheList(res) {
   const items = files.map(file => {
     const key = file.replace(/\.[^.]+$/, '');
     const item = metadata[file] || metadata[key] || {};
+    const isVideo = /\.(mp4|webm|mov)$/i.test(file);
     return {
-      type: 'audio',
+      type: isVideo ? 'video' : 'audio',
       src: '/cache-audio?file=' + encodeURIComponent(file),
       name: item.title || '缓存歌曲 ' + key.slice(0, 8),
       url: item.url || '',
-      cached: true
+      cached: true,
+      local: Boolean(item.local)
     };
   });
   res.writeHead(200, { 'Content-Type': 'application/json' });
