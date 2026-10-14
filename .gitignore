@@ -2,6 +2,9 @@
 cache/*
 !cache/.gitkeep
 
+# Ignore Nginx runtime logs.
+nginx/logs/
+
 # Ignore all environment files.
 .env
 .env.*
