@@ -10,6 +10,7 @@ const { PassThrough } = require('stream');
 const execFileAsync = promisify(require('child_process').execFile);
 const CACHE_DIR = process.env.CACHE_DIR || '/app/cache';
 const CACHE_META = path.join(CACHE_DIR, 'index.json');
+const VISITOR_META = path.join(CACHE_DIR, 'visitors.json');
 const YOUTUBE_PROXY = process.env.YOUTUBE_PROXY || '';
 if (YOUTUBE_PROXY) {
   let proxyUrl;
@@ -23,13 +24,39 @@ fs.mkdirSync(CACHE_DIR, { recursive: true });
 const startTime = Date.now();
 let visitorCount = 0;
 
+function getClientVisitor(req, res) {
+  const cookies = String(req.headers.cookie || '').split(';').reduce((map, part) => {
+    const [key, ...value] = part.trim().split('=');
+    if (key) map[key] = decodeURIComponent(value.join('='));
+    return map;
+  }, {});
+  const deviceId = cookies.bear_device || crypto.randomUUID();
+  const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+  const userAgent = String(req.headers['user-agent'] || '');
+  const visitorId = crypto.createHash('sha256').update(`${ip}|${userAgent}|${deviceId}`).digest('hex');
+  let visitors = {};
+  try { visitors = JSON.parse(fs.readFileSync(VISITOR_META, 'utf8')); } catch {}
+  if (!visitors[visitorId]) {
+    const total = Object.keys(visitors).length + 1;
+    visitors[visitorId] = { firstSeen: new Date().toISOString(), ip, userAgent };
+    fs.writeFileSync(VISITOR_META + '.tmp', JSON.stringify(visitors, null, 2) + '\n');
+    fs.renameSync(VISITOR_META + '.tmp', VISITOR_META);
+    visitorCount = total;
+  } else {
+    visitorCount = Object.keys(visitors).length;
+  }
+  const secure = req.headers['x-forwarded-proto'] === 'https' || req.socket.encrypted;
+  res.setHeader('Set-Cookie', `bear_device=${encodeURIComponent(deviceId)}; Max-Age=31536000; Path=/; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}`);
+  return visitorCount;
+}
+
 const server = http.createServer((req, res) => {
   const requestUrl = new URL(req.url, 'http://localhost');
   if (requestUrl.pathname === '/') {
-    visitorCount++;
+    const currentVisitorNumber = getClientVisitor(req, res);
     
     const startDate = new Date(startTime).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-    const htmlContent = getHTMLContent(startTime, visitorCount, startDate);
+    const htmlContent = getHTMLContent(startTime, currentVisitorNumber, startDate);
     
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(htmlContent);
