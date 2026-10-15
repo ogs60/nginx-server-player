@@ -1,7 +1,7 @@
 # Ignore local and cloud media caches.
 cache/*
 !cache/.gitkeep
-!cache/index.json
+cache/index.json
 cache/visitors.json
 
 # Ignore Nginx runtime logs.

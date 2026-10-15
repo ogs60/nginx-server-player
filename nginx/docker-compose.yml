@@ -6,6 +6,8 @@ services:
     ports:
       - "80:80"
       - "443:443"
+    environment:
+      TZ: Asia/Shanghai
     volumes:
       - ./${NGINX_CONFIG:-nginx.conf}:/etc/nginx/nginx.conf:ro
       - ./certs:/etc/nginx/certs:ro
