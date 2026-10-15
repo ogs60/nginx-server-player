@@ -635,25 +635,25 @@ function readCacheMetadata() {
   }
 }
 
+function normalizeMetadataOrder(metadata) {
+  const entries = Object.entries(metadata).sort(([, a], [, b]) => {
+    const ao = Number(a.order) || Number.MAX_SAFE_INTEGER;
+    const bo = Number(b.order) || Number.MAX_SAFE_INTEGER;
+    return ao - bo;
+  });
+  entries.forEach(([, item], index) => { item.order = index + 1; });
+  return metadata;
+}
+
 function writeCacheMetadataEntry(key, value) {
   metadataWriteQueue = metadataWriteQueue.then(() => {
-    const metadata = readCacheMetadata();
-    let maxOrder = Object.values(metadata).reduce((max, item) => Math.max(max, Number(item.order) || 0), 0);
-
-    for (const item of Object.values(metadata)) {
-      if (!Number.isInteger(Number(item.order)) || Number(item.order) < 1) {
-        item.order = ++maxOrder;
-      } else {
-        item.order = Number(item.order);
-      }
-    }
-
+    const metadata = normalizeMetadataOrder(readCacheMetadata());
     const existing = metadata[key] || {};
-    if (!existing.order) existing.order = ++maxOrder;
+    if (!existing.order) existing.order = Object.keys(metadata).length + 1;
     metadata[key] = { ...existing, ...value, order: existing.order };
-
+    const normalized = normalizeMetadataOrder(metadata);
     const temp = CACHE_META + '.tmp';
-    fs.writeFileSync(temp, JSON.stringify(metadata, null, 2) + '\n');
+    fs.writeFileSync(temp, JSON.stringify(normalized, null, 2) + '\n');
     fs.renameSync(temp, CACHE_META);
   });
   return metadataWriteQueue;
@@ -663,8 +663,9 @@ function deleteCacheMetadataEntry(key) {
   metadataWriteQueue = metadataWriteQueue.then(() => {
     const metadata = readCacheMetadata();
     delete metadata[key];
+    const normalized = normalizeMetadataOrder(metadata);
     const temp = CACHE_META + '.tmp';
-    fs.writeFileSync(temp, JSON.stringify(metadata, null, 2) + '\n');
+    fs.writeFileSync(temp, JSON.stringify(normalized, null, 2) + '\n');
     fs.renameSync(temp, CACHE_META);
   });
   return metadataWriteQueue;
@@ -673,9 +674,19 @@ function deleteCacheMetadataEntry(key) {
 function handleCacheList(res) {
   const metadata = readCacheMetadata();
   const files = fs.readdirSync(CACHE_DIR).filter(file => /\.(mp3|wav|m4a|aac|ogg|flac|mp4|webm|mov)$/i.test(file));
+  const activeKeys = new Set(files.map(file => file.replace(/\.[^.]+$/, '')));
+  const reconciled = Object.fromEntries(Object.entries(metadata).filter(([key]) => activeKeys.has(key)));
+  const normalized = normalizeMetadataOrder(reconciled);
+  if (JSON.stringify(normalized) !== JSON.stringify(metadata)) {
+    metadataWriteQueue = metadataWriteQueue.then(() => {
+      const temp = CACHE_META + '.tmp';
+      fs.writeFileSync(temp, JSON.stringify(normalized, null, 2) + '\n');
+      fs.renameSync(temp, CACHE_META);
+    });
+  }
   const items = files.map(file => {
     const key = file.replace(/\.[^.]+$/, '');
-    const item = metadata[file] || metadata[key] || {};
+    const item = normalized[file] || normalized[key] || {};
     const isVideo = /\.(mp4|webm|mov)$/i.test(file);
     return {
       order: Number(item.order) || 999999,
