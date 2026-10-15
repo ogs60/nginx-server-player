@@ -337,7 +337,6 @@ function getHTMLContent(startTime, visitorCount, startDate) {
           </label>
         </div>
         
-        <button onclick="clearPlayer()" style="margin-bottom: 0;">清空</button>
       </div>
     </div>
   </div>
@@ -602,19 +601,6 @@ function getHTMLContent(startTime, visitorCount, startDate) {
         body: JSON.stringify({ url: item.url, title: item.name })
       }).catch(error => console.warn('缓存元数据保存失败:', error.message));
     }
-    function clearPlayer() {
-      audioPlayer.pause();
-      videoPlayer.pause();
-      playlistItems.forEach(item => { if (item.local && item.src.startsWith('blob:')) URL.revokeObjectURL(item.src); });
-      playlistItems = [];
-      currentIndex = -1;
-      audioPlayer.src = '';
-      videoPlayer.src = '';
-      urlInput.value = '';
-      nowPlaying.textContent = '未加载媒体';
-      renderPlaylist();
-    }
-
     
     audioPlayer.addEventListener('ended', playNext);
     videoPlayer.addEventListener('ended', playNext);
