@@ -8,3 +8,12 @@ nginx/logs/
 # Ignore all environment files.
 .env
 .env.*
+
+# Ignore TLS private keys and local certificates.
+nginx/certs/*.key
+nginx/certs/*-key.pem
+nginx/certs/localhost.pem
+
+# Ignore Nginx local-only configuration.
+nginx/nginx.local.conf
+
