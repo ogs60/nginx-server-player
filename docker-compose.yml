@@ -10,7 +10,7 @@ services:
       YOUTUBE_PROXY: ${YOUTUBE_PROXY:-}
     volumes:
       - ${CACHE_DIR:-./cache}:/app/cache
-      - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
+      - /etc/localtime:/etc/localtime:ro
     networks:
       - music-auth
 
