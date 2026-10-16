@@ -21,6 +21,8 @@ if (YOUTUBE_PROXY) {
   }
 }
 const DOWNLOAD_PROGRESS = new Map();
+const ONLINE_VISITOR_TIMEOUT = 5 * 60 * 1000;
+const ONLINE_VISITORS = new Map();
 fs.mkdirSync(CACHE_DIR, { recursive: true });
 const startTime = Date.now();
 let visitorCount = 0;
@@ -72,13 +74,26 @@ function writeVisitorData(data) {
   fs.renameSync(tempPath, VISITOR_META);
 }
 
-function getClientVisitor(req, res) {
+function getVisitorIdentity(req) {
   const deviceCookie = String(req.headers.cookie || '').split(';')
     .map(cookie => cookie.trim())
     .find(cookie => cookie.startsWith('bear_device='));
   const deviceId = deviceCookie ? deviceCookie.slice('bear_device='.length) : crypto.randomUUID();
   const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
-  const visitorId = crypto.createHash('sha256').update(`${ip}|${deviceId}`).digest('hex');
+  return {
+    deviceId,
+    visitorId: crypto.createHash('sha256').update(`${ip}|${deviceId}`).digest('hex'),
+    secure: req.headers['x-forwarded-proto'] === 'https' || req.socket.encrypted
+  };
+}
+
+function setVisitorCookie(res, deviceId, secure) {
+  res.setHeader('Set-Cookie', `bear_device=${encodeURIComponent(deviceId)}; Max-Age=31536000; Path=/; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}`);
+}
+
+function getClientVisitor(req, res) {
+  const { deviceId, visitorId, secure } = getVisitorIdentity(req);
+  const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
   const date = getShanghaiDate();
   const visitors = readVisitorData();
   visitors.days[date] ||= {};
@@ -102,9 +117,20 @@ function getClientVisitor(req, res) {
     writeVisitorData(visitors);
   }
   visitorCount = Object.keys(dayVisitors).length;
-  const secure = req.headers['x-forwarded-proto'] === 'https' || req.socket.encrypted;
-  res.setHeader('Set-Cookie', `bear_device=${encodeURIComponent(deviceId)}; Max-Age=31536000; Path=/; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}`);
+  setVisitorCookie(res, deviceId, secure);
   return visitorCount;
+}
+
+function handleOnlineVisitors(req, res) {
+  const { deviceId, visitorId, secure } = getVisitorIdentity(req);
+  const now = Date.now();
+  for (const [id, lastSeen] of ONLINE_VISITORS) {
+    if (now - lastSeen >= ONLINE_VISITOR_TIMEOUT) ONLINE_VISITORS.delete(id);
+  }
+  ONLINE_VISITORS.set(visitorId, now);
+  setVisitorCookie(res, deviceId, secure);
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ count: ONLINE_VISITORS.size }));
 }
 
 const server = http.createServer((req, res) => {
@@ -125,6 +151,8 @@ const server = http.createServer((req, res) => {
     
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(htmlContent);
+  } else if (requestUrl.pathname === '/online-visitors') {
+    handleOnlineVisitors(req, res);
   } else if (requestUrl.pathname === '/preload') {
     handlePreload(requestUrl, req, res);
   } else if (requestUrl.pathname === '/yt-audio') {
@@ -355,6 +383,10 @@ function getHTMLContent(startTime, visitorCount, startDate) {
         <span class="label">今日独立访客：</span>
         <span class="value">${visitorCount}</span>
       </div>
+      <div class="info">
+        <span class="label">当前在线人数：</span>
+        <span class="value"><span id="onlineVisitors">统计中...</span></span>
+      </div>
     </div>
     
     <div class="player-section">
@@ -463,6 +495,18 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       const minutes = Math.floor((uptime % 3600) / 60);
       const seconds = uptime % 60;
       document.getElementById('uptime').textContent = hours + '小时 ' + minutes + '分钟 ' + seconds + '秒';
+    }
+
+    function updateOnlineVisitors() {
+      fetch('/online-visitors')
+        .then(response => {
+          if (!response.ok) throw new Error('在线人数获取失败: ' + response.status);
+          return response.json();
+        })
+        .then(data => {
+          document.getElementById('onlineVisitors').textContent = data.count;
+        })
+        .catch(error => console.warn('在线人数更新失败:', error.message));
     }
     
     function renderPlaylist() {
@@ -684,6 +728,8 @@ function getHTMLContent(startTime, visitorCount, startDate) {
     loadCachedSongs();
     updateUptime();
     setInterval(updateUptime, 1000);
+    updateOnlineVisitors();
+    setInterval(updateOnlineVisitors, 60 * 1000);
   </script>
 </body>
 </html>`;
