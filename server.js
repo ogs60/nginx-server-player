@@ -1041,22 +1041,24 @@ function startDownload(inputUrl, key, cachePath, format) {
         ? spawn('ffmpeg', ['-i', 'pipe:0', '-f', 'mp3', '-q:a', '5', tempPath], { stdio: ['pipe', 'ignore', 'pipe'] })
         : null;
       const progressPattern = /\[download\]\s+(\d+(?:\.\d+)?)%/;
-      let ytFailed = false;
       const logYtOutput = (stream, data) => {
         const text = data.toString();
         const match = text.match(progressPattern);
         if (match) DOWNLOAD_PROGRESS.set(key, { status: 'loading', percent: Number(match[1]), attempt: attempts });
-        if (/ERROR:|HTTP Error 403|unable to download video data/i.test(text)) ytFailed = true;
         console.log(`yt-dlp ${stream}:`, text.trim().slice(0, 300));
       };
       if (ffmpeg) yt.stdout.pipe(ffmpeg.stdin);
       else yt.stdout.on('data', data => logYtOutput('stdout', data));
       yt.stderr.on('data', data => logYtOutput('stderr', data));
       if (ffmpeg) ffmpeg.stderr.on('data', data => console.log('FFmpeg:', data.toString().trim().slice(0, 300)));
-      yt.on('error', error => { ytFailed = true; console.error('yt-dlp error:', error.message); });
+      yt.on('error', error => console.error('yt-dlp error:', error.message));
       if (ffmpeg) ffmpeg.on('error', error => console.error('FFmpeg error:', error.message));
-      const complete = code => {
-        const downloaded = !ytFailed && code === 0 && fs.existsSync(tempPath) && fs.statSync(tempPath).size > 0;
+      const finish = (ytCode, ffmpegCode = 0) => {
+        let outputSize = 0;
+        try { outputSize = fs.statSync(tempPath).size; } catch (error) {
+          if (error.code !== 'ENOENT') return reject(error);
+        }
+        const downloaded = ytCode === 0 && ffmpegCode === 0 && outputSize > 0;
         if (downloaded) {
           fs.rename(tempPath, cachePath, error => {
             if (error) return reject(error);
@@ -1067,18 +1069,24 @@ function startDownload(inputUrl, key, cachePath, format) {
             }).catch(reject);
           });
         } else if (attempts < 3) {
-          console.warn(`[cache] ${format.toUpperCase()} download attempt ${attempts}/3 failed (key=${key.slice(0, 12)}, exit=${code}); retrying`);
+          console.warn(`[cache] ${format.toUpperCase()} download attempt ${attempts}/3 failed (key=${key.slice(0, 12)}, yt-dlp exit=${ytCode}, ffmpeg exit=${ffmpegCode}, output=${outputSize} bytes); retrying`);
           try { fs.unlinkSync(tempPath); } catch {}
           setTimeout(run, attempts * 1000);
         } else {
           try { fs.unlinkSync(tempPath); } catch {}
           DOWNLOAD_PROGRESS.set(key, { status: 'error', percent: 0, attempt: attempts });
-          console.error(`[cache] ${format.toUpperCase()} download failed (key=${key.slice(0, 12)}, exit=${code})`);
+          console.error(`[cache] ${format.toUpperCase()} download failed (key=${key.slice(0, 12)}, yt-dlp exit=${ytCode}, ffmpeg exit=${ffmpegCode}, output=${outputSize} bytes)`);
           reject(new Error(`YouTube ${format.toUpperCase()} 下载失败，已重试 3 次`));
         }
       };
-      if (ffmpeg) ffmpeg.on('close', complete);
-      else yt.on('close', complete);
+      if (ffmpeg) {
+        Promise.all([
+          new Promise(resolve => yt.once('close', resolve)),
+          new Promise(resolve => ffmpeg.once('close', resolve))
+        ]).then(([ytCode, ffmpegCode]) => finish(ytCode, ffmpegCode));
+      } else {
+        yt.once('close', code => finish(code));
+      }
     };
     run();
   }).finally(() => setTimeout(() => DOWNLOAD_TASKS.delete(key), 60000));
