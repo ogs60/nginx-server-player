@@ -11,6 +11,7 @@ const execFileAsync = promisify(require('child_process').execFile);
 const CACHE_DIR = process.env.CACHE_DIR || '/app/cache';
 const CACHE_META = path.join(CACHE_DIR, 'index.json');
 const VISITOR_META = path.join(CACHE_DIR, 'visitors.json');
+const PORT = Number(process.env.PORT) || 80;
 const YOUTUBE_PROXY = process.env.YOUTUBE_PROXY || '';
 if (YOUTUBE_PROXY) {
   let proxyUrl;
@@ -24,27 +25,83 @@ fs.mkdirSync(CACHE_DIR, { recursive: true });
 const startTime = Date.now();
 let visitorCount = 0;
 
-function getClientVisitor(req, res) {
-  const cookies = String(req.headers.cookie || '').split(';').reduce((map, part) => {
-    const [key, ...value] = part.trim().split('=');
-    if (key) map[key] = decodeURIComponent(value.join('='));
-    return map;
-  }, {});
-  const deviceId = cookies.bear_device || crypto.randomUUID();
-  const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
-  const userAgent = String(req.headers['user-agent'] || '');
-  const visitorId = crypto.createHash('sha256').update(`${ip}|${userAgent}|${deviceId}`).digest('hex');
-  let visitors = {};
-  try { visitors = JSON.parse(fs.readFileSync(VISITOR_META, 'utf8')); } catch {}
-  if (!visitors[visitorId]) {
-    const total = Object.keys(visitors).length + 1;
-    visitors[visitorId] = { firstSeen: new Date().toISOString(), ip, userAgent };
-    fs.writeFileSync(VISITOR_META + '.tmp', JSON.stringify(visitors, null, 2) + '\n');
-    fs.renameSync(VISITOR_META + '.tmp', VISITOR_META);
-    visitorCount = total;
-  } else {
-    visitorCount = Object.keys(visitors).length;
+function getShanghaiDate(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function readVisitorData() {
+  let data;
+  try {
+    data = JSON.parse(fs.readFileSync(VISITOR_META, 'utf8'));
+  } catch (error) {
+    if (error.code === 'ENOENT') return { days: {} };
+    throw error;
   }
+
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    throw new Error('Invalid visitor statistics data');
+  }
+  if (data.days && typeof data.days === 'object' && !Array.isArray(data.days)) return data;
+
+  const migrated = { days: {} };
+  for (const [legacyId, visitor] of Object.entries(data)) {
+    if (!visitor || typeof visitor !== 'object') {
+      throw new Error('Invalid legacy visitor statistics data');
+    }
+    const firstSeen = new Date(visitor.firstSeen);
+    if (Number.isNaN(firstSeen.getTime())) {
+      throw new Error('Invalid legacy visitor statistics data');
+    }
+    const date = getShanghaiDate(firstSeen);
+    migrated.days[date] ||= {};
+    migrated.days[date][`legacy-${legacyId}`] = visitor;
+  }
+  return migrated;
+}
+
+function writeVisitorData(data) {
+  const tempPath = VISITOR_META + '.tmp';
+  fs.writeFileSync(tempPath, JSON.stringify(data, null, 2) + '\n');
+  fs.renameSync(tempPath, VISITOR_META);
+}
+
+function getClientVisitor(req, res) {
+  const deviceCookie = String(req.headers.cookie || '').split(';')
+    .map(cookie => cookie.trim())
+    .find(cookie => cookie.startsWith('bear_device='));
+  const deviceId = deviceCookie ? deviceCookie.slice('bear_device='.length) : crypto.randomUUID();
+  const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+  const visitorId = crypto.createHash('sha256').update(`${ip}|${deviceId}`).digest('hex');
+  const date = getShanghaiDate();
+  const visitors = readVisitorData();
+  visitors.days[date] ||= {};
+  const dayVisitors = visitors.days[date];
+  const username = String(req.headers['x-auth-request-user'] || '').trim();
+  const email = String(req.headers['x-auth-request-email'] || '').trim();
+  const existing = dayVisitors[visitorId];
+
+  if (!existing) {
+    dayVisitors[visitorId] = {
+      firstSeen: new Date().toISOString(),
+      ip,
+      ...(username ? { username } : {}),
+      ...(email ? { email } : {})
+    };
+    writeVisitorData(visitors);
+  } else if ((username && existing.username !== username) || (email && existing.email !== email)) {
+    if (username) existing.username = username;
+    if (email) existing.email = email;
+    existing.lastSeen = new Date().toISOString();
+    writeVisitorData(visitors);
+  }
+  visitorCount = Object.keys(dayVisitors).length;
   const secure = req.headers['x-forwarded-proto'] === 'https' || req.socket.encrypted;
   res.setHeader('Set-Cookie', `bear_device=${encodeURIComponent(deviceId)}; Max-Age=31536000; Path=/; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}`);
   return visitorCount;
@@ -53,7 +110,15 @@ function getClientVisitor(req, res) {
 const server = http.createServer((req, res) => {
   const requestUrl = new URL(req.url, 'http://localhost');
   if (requestUrl.pathname === '/') {
-    const currentVisitorNumber = getClientVisitor(req, res);
+    let currentVisitorNumber;
+    try {
+      currentVisitorNumber = getClientVisitor(req, res);
+    } catch (error) {
+      console.error('Visitor statistics error:', error.message);
+      res.writeHead(500);
+      res.end('Visitor statistics unavailable');
+      return;
+    }
     
     const startDate = new Date(startTime).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
     const htmlContent = getHTMLContent(startTime, currentVisitorNumber, startDate);
@@ -287,7 +352,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
         <span class="value"><span id="uptime">计算中...</span></span>
       </div>
       <div class="info">
-        <span class="label">你是第几位访客：</span>
+        <span class="label">今日独立访客：</span>
         <span class="value">${visitorCount}</span>
       </div>
     </div>
@@ -957,6 +1022,6 @@ async function handleYouTubeAudio(url, req, res) {
   }
 }
 
-server.listen(80, () => {
-  console.log('Server running on port 80');
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
