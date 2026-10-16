@@ -436,7 +436,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
           <label for="youtubeFormat">YouTube 下载格式：</label>
           <select id="youtubeFormat" class="url-input">
             <option value="mp3">MP3 音频</option>
-            <option value="mp4">MP4 视频</option>
+            <option value="mp4">MP4 视频（优先 720p，最佳音轨）</option>
           </select>
         </div>
         
@@ -1026,7 +1026,7 @@ function startDownload(inputUrl, key, cachePath, format) {
     const { spawn } = require('child_process');
     const ytArgs = ['--socket-timeout', '30', '--no-warnings', '--no-playlist', '--newline'];
     if (format === 'mp4') {
-      ytArgs.push('-f', 'bv*+ba/b', '--merge-output-format', 'mp4', '--remux-video', 'mp4', '-o', tempPath, inputUrl);
+      ytArgs.push('--concurrent-fragments', '4', '-f', 'bv[height<=720]+ba/bv+ba', '--merge-output-format', 'mp4', '--remux-video', 'mp4', '-o', tempPath, inputUrl);
     } else {
       ytArgs.push('-f', 'bestaudio', '-o', '-', inputUrl);
     }
@@ -1042,14 +1042,16 @@ function startDownload(inputUrl, key, cachePath, format) {
         : null;
       const progressPattern = /\[download\]\s+(\d+(?:\.\d+)?)%/;
       let ytFailed = false;
-      if (ffmpeg) yt.stdout.pipe(ffmpeg.stdin);
-      yt.stderr.on('data', data => {
+      const logYtOutput = (stream, data) => {
         const text = data.toString();
         const match = text.match(progressPattern);
         if (match) DOWNLOAD_PROGRESS.set(key, { status: 'loading', percent: Number(match[1]), attempt: attempts });
         if (/ERROR:|HTTP Error 403|unable to download video data/i.test(text)) ytFailed = true;
-        console.log('yt-dlp:', text.trim().slice(0, 300));
-      });
+        console.log(`yt-dlp ${stream}:`, text.trim().slice(0, 300));
+      };
+      if (ffmpeg) yt.stdout.pipe(ffmpeg.stdin);
+      else yt.stdout.on('data', data => logYtOutput('stdout', data));
+      yt.stderr.on('data', data => logYtOutput('stderr', data));
       if (ffmpeg) ffmpeg.stderr.on('data', data => console.log('FFmpeg:', data.toString().trim().slice(0, 300)));
       yt.on('error', error => { ytFailed = true; console.error('yt-dlp error:', error.message); });
       if (ffmpeg) ffmpeg.on('error', error => console.error('FFmpeg error:', error.message));
