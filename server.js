@@ -21,7 +21,7 @@ if (YOUTUBE_PROXY) {
   }
 }
 const DOWNLOAD_PROGRESS = new Map();
-const ONLINE_VISITOR_TIMEOUT = 5 * 60 * 1000;
+const ONLINE_VISITOR_TIMEOUT = 2 * 60 * 1000;
 const ONLINE_VISITORS = new Map();
 fs.mkdirSync(CACHE_DIR, { recursive: true });
 const startTime = Date.now();
@@ -89,6 +89,15 @@ function getVisitorIdentity(req) {
 
 function setVisitorCookie(res, deviceId, secure) {
   res.setHeader('Set-Cookie', `bear_device=${encodeURIComponent(deviceId)}; Max-Age=31536000; Path=/; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}`);
+}
+
+function getYouTubeCacheKey(inputUrl, format) {
+  const keyInput = format === 'mp4' ? `${inputUrl}\nmp4` : inputUrl;
+  return crypto.createHash('sha256').update(keyInput).digest('hex');
+}
+
+function getYouTubeFormat(value) {
+  return value === 'mp4' ? 'mp4' : value === 'mp3' || !value ? 'mp3' : null;
 }
 
 function getClientVisitor(req, res) {
@@ -423,6 +432,13 @@ function getHTMLContent(startTime, visitorCount, startDate) {
             placeholder="粘贴音乐/视频 URL"
           >
         </div>
+        <div style="margin-bottom: 15px;">
+          <label for="youtubeFormat">YouTube 下载格式：</label>
+          <select id="youtubeFormat" class="url-input">
+            <option value="mp3">MP3 音频</option>
+            <option value="mp4">MP4 视频</option>
+          </select>
+        </div>
         
         <div class="button-group">
           <button id="loadBtn" onclick="loadFromUrl()">加载</button>
@@ -454,6 +470,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
     const singleRepeatToggle = document.getElementById('singleRepeatToggle');
     const loadBtn = document.getElementById('loadBtn');
     const urlInput = document.getElementById('urlInput');
+    const youtubeFormat = document.getElementById('youtubeFormat');
     
     let currentPlayer = null;
     let playlistItems = [];
@@ -579,24 +596,31 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       }
       urlInput.value = '';
       if (isYouTube(inputUrl)) {
+        const format = youtubeFormat.value;
         const shouldPreload = currentIndex >= 0;
-        const item = { type: 'audio', src: '/yt-audio?url=' + encodeURIComponent(inputUrl), name: inputUrl, url: inputUrl };
+        const item = {
+          type: format === 'mp4' ? 'video' : 'audio',
+          src: '/yt-audio?url=' + encodeURIComponent(inputUrl) + '&format=' + format,
+          name: inputUrl,
+          url: inputUrl,
+          format
+        };
         addPlaylistItem(item);
         if (currentIndex < 0) playItem(0);
         else nowPlaying.textContent = '已加入播放列表: ' + inputUrl;
 
         startProgressPolling(item);
         if (shouldPreload) {
-          fetch('/preload?url=' + encodeURIComponent(item.url)).then(response => response.arrayBuffer()).catch(() => {});
+          fetch('/preload?url=' + encodeURIComponent(item.url) + '&format=' + format).then(response => response.arrayBuffer()).catch(() => {});
         }
         fetch('/get-audio-url', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: inputUrl })
+          body: JSON.stringify({ url: inputUrl, format })
         }).then(response => response.json()).then(data => {
           if (data.title) {
             applyUrlTitle(item.url, data.title);
-            updateCacheMetadata({ url: item.url, name: data.title });
+            updateCacheMetadata({ url: item.url, name: data.title, format });
           }
         }).catch(error => {
           console.warn('标题获取失败，继续使用 URL 播放:', error.message);
@@ -668,14 +692,15 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       if (!item.url || !isYouTube(item.url)) return;
       progressWrap.style.display = 'block';
       progressValue.style.width = '0%';
-      progressText.textContent = '正在解析和转换音频...';
+      progressText.textContent = item.format === 'mp4' ? '正在解析和下载视频...' : '正在解析和转换音频...';
       const timer = setInterval(() => {
-        fetch('/cache-progress?url=' + encodeURIComponent(item.url))
+        fetch('/cache-progress?url=' + encodeURIComponent(item.url) + '&format=' + (item.format || 'mp3'))
           .then(response => response.json())
           .then(data => {
             const percent = Number(data.percent || 0);
             progressValue.style.width = percent + '%';
-            progressText.textContent = data.cached ? '已缓存，可直接播放' : (percent > 0 ? '正在加载 ' + percent.toFixed(1) + '%' : '正在解析和转换音频...');
+            const taskLabel = item.format === 'mp4' ? '正在下载视频' : '正在转换音频';
+            progressText.textContent = data.cached ? '已缓存，可直接播放' : (percent > 0 ? taskLabel + ' ' + percent.toFixed(1) + '%' : item.format === 'mp4' ? '正在解析和下载视频...' : '正在解析和转换音频...');
             if (data.cached || data.status === 'error') {
               clearInterval(timer);
               if (data.cached) setTimeout(() => { progressWrap.style.display = 'none'; }, 1200);
@@ -707,7 +732,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       fetch('/cache-metadata', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: item.url, title: item.name })
+        body: JSON.stringify({ url: item.url, title: item.name, format: item.format || 'mp3' })
       }).catch(error => console.warn('缓存元数据保存失败:', error.message));
     }
     
@@ -820,7 +845,9 @@ function handleCacheMetadata(req, res) {
     try {
       const data = JSON.parse(body);
       if (!data.url || !data.title) throw new Error('invalid metadata');
-      const key = crypto.createHash('sha256').update(data.url).digest('hex');
+      const format = getYouTubeFormat(data.format);
+      if (!format) throw new Error('invalid format');
+      const key = getYouTubeCacheKey(data.url, format);
       writeCacheMetadataEntry(key, { url: data.url, title: data.title }).then(() => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true }));
@@ -899,8 +926,10 @@ function handleCacheAudio(url, res) {
 
 function handleCacheProgress(url, res) {
   const inputUrl = url.searchParams.get('url') || '';
-  const key = crypto.createHash('sha256').update(inputUrl).digest('hex');
-  const cachePath = path.join(CACHE_DIR, key + '.mp3');
+  const format = getYouTubeFormat(url.searchParams.get('format'));
+  if (!format) { res.writeHead(400); res.end('Invalid format'); return; }
+  const key = getYouTubeCacheKey(inputUrl, format);
+  const cachePath = path.join(CACHE_DIR, `${key}.${format}`);
   const progress = DOWNLOAD_PROGRESS.get(key) || {};
   if (fs.existsSync(cachePath) && fs.statSync(cachePath).size > 0) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -917,6 +946,8 @@ async function handleGetAudioUrl(req, res) {
     try {
       const data = JSON.parse(body);
       const inputUrl = data.url;
+      const format = getYouTubeFormat(data.format);
+      if (!validateYouTubeUrl(inputUrl) || !format) throw new Error('Invalid YouTube URL or format');
       let title = '';
       try {
         const ytArgs = [
@@ -935,7 +966,7 @@ async function handleGetAudioUrl(req, res) {
       }
       const finalTitle = title.substring(0, 200);
       if (finalTitle) {
-        const key = crypto.createHash('sha256').update(inputUrl).digest('hex');
+        const key = getYouTubeCacheKey(inputUrl, format);
         writeCacheMetadataEntry(key, { url: inputUrl, title: finalTitle });
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -987,23 +1018,27 @@ function validateYouTubeUrl(inputUrl) {
 
 const DOWNLOAD_TASKS = new Map();
 
-function startDownload(inputUrl, key, cachePath) {
+function startDownload(inputUrl, key, cachePath, format) {
   if (DOWNLOAD_TASKS.has(key)) return DOWNLOAD_TASKS.get(key);
   const task = new Promise((resolve, reject) => {
-    const tempPath = cachePath + '.part';
+    const tempPath = format === 'mp4' ? cachePath + '.download.mp4' : cachePath + '.part';
     try { fs.unlinkSync(tempPath); } catch {}
     const { spawn } = require('child_process');
-    const ytArgs = ['--socket-timeout', '30', '--no-warnings', '--no-playlist', '-f', 'bestaudio', '-o', '-', inputUrl];
+    const ytArgs = format === 'mp4'
+      ? ['--socket-timeout', '30', '--no-warnings', '--no-playlist', '-f', 'bv*+ba/b', '--merge-output-format', 'mp4', '--remux-video', 'mp4', '-o', tempPath, inputUrl]
+      : ['--socket-timeout', '30', '--no-warnings', '--no-playlist', '-f', 'bestaudio', '-o', '-', inputUrl];
     if (YOUTUBE_PROXY) ytArgs.unshift('--proxy', YOUTUBE_PROXY);
     let attempts = 0;
     const run = () => {
       attempts++;
       DOWNLOAD_PROGRESS.set(key, { status: 'loading', percent: 0, attempt: attempts });
       const yt = spawn('yt-dlp', ytArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
-      const ffmpeg = spawn('ffmpeg', ['-i', 'pipe:0', '-f', 'mp3', '-q:a', '5', tempPath], { stdio: ['pipe', 'ignore', 'pipe'] });
+      const ffmpeg = format === 'mp3'
+        ? spawn('ffmpeg', ['-i', 'pipe:0', '-f', 'mp3', '-q:a', '5', tempPath], { stdio: ['pipe', 'ignore', 'pipe'] })
+        : null;
       const progressPattern = /\[download\]\s+(\d+(?:\.\d+)?)%/;
       let ytFailed = false;
-      yt.stdout.pipe(ffmpeg.stdin);
+      if (ffmpeg) yt.stdout.pipe(ffmpeg.stdin);
       yt.stderr.on('data', data => {
         const text = data.toString();
         const match = text.match(progressPattern);
@@ -1011,11 +1046,12 @@ function startDownload(inputUrl, key, cachePath) {
         if (/ERROR:|HTTP Error 403|unable to download video data/i.test(text)) ytFailed = true;
         console.log('yt-dlp:', text.trim().slice(0, 300));
       });
-      ffmpeg.stderr.on('data', data => console.log('FFmpeg:', data.toString().trim().slice(0, 300)));
+      if (ffmpeg) ffmpeg.stderr.on('data', data => console.log('FFmpeg:', data.toString().trim().slice(0, 300)));
       yt.on('error', error => { ytFailed = true; console.error('yt-dlp error:', error.message); });
-      ffmpeg.on('error', error => console.error('FFmpeg error:', error.message));
-      ffmpeg.on('close', code => {
-        if (code === 0 && !ytFailed && fs.existsSync(tempPath) && fs.statSync(tempPath).size > 0) {
+      if (ffmpeg) ffmpeg.on('error', error => console.error('FFmpeg error:', error.message));
+      const complete = code => {
+        const downloaded = !ytFailed && code === 0 && fs.existsSync(tempPath) && fs.statSync(tempPath).size > 0;
+        if (downloaded) {
           fs.rename(tempPath, cachePath, error => {
             if (error) return reject(error);
             writeCacheMetadataEntry(key, { url: inputUrl }).then(() => {
@@ -1029,9 +1065,11 @@ function startDownload(inputUrl, key, cachePath) {
         } else {
           try { fs.unlinkSync(tempPath); } catch {}
           DOWNLOAD_PROGRESS.set(key, { status: 'error', percent: 0, attempt: attempts });
-          reject(new Error('YouTube 音频下载失败，已重试 3 次'));
+          reject(new Error(`YouTube ${format.toUpperCase()} 下载失败，已重试 3 次`));
         }
-      });
+      };
+      if (ffmpeg) ffmpeg.on('close', complete);
+      else yt.on('close', complete);
     };
     run();
   }).finally(() => setTimeout(() => DOWNLOAD_TASKS.delete(key), 60000));
@@ -1041,16 +1079,19 @@ function startDownload(inputUrl, key, cachePath) {
 
 function sendCachedAudio(cachePath, res) {
   const stat = fs.statSync(cachePath);
-  res.writeHead(200, { 'Content-Type': 'audio/mpeg', 'Content-Length': stat.size, 'Cache-Control': 'public, max-age=31536000' });
+  const contentType = path.extname(cachePath).toLowerCase() === '.mp4' ? 'video/mp4' : 'audio/mpeg';
+  res.writeHead(200, { 'Content-Type': contentType, 'Content-Length': stat.size, 'Cache-Control': 'public, max-age=31536000' });
   fs.createReadStream(cachePath).pipe(res);
 }
 
 async function handlePreload(url, req, res) {
   const inputUrl = url.searchParams.get('url') || '';
   if (!validateYouTubeUrl(inputUrl)) { res.writeHead(400); res.end('Invalid YouTube URL'); return; }
-  const key = crypto.createHash('sha256').update(inputUrl).digest('hex');
-  const cachePath = path.join(CACHE_DIR, key + '.mp3');
-  if (!fs.existsSync(cachePath)) startDownload(inputUrl, key, cachePath).catch(error => console.error('Preload failed:', error.message));
+  const format = getYouTubeFormat(url.searchParams.get('format'));
+  if (!format) { res.writeHead(400); res.end('Invalid format'); return; }
+  const key = getYouTubeCacheKey(inputUrl, format);
+  const cachePath = path.join(CACHE_DIR, `${key}.${format}`);
+  if (!fs.existsSync(cachePath)) startDownload(inputUrl, key, cachePath, format).catch(error => console.error('Preload failed:', error.message));
   res.writeHead(202, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ accepted: true, key }));
 }
@@ -1058,10 +1099,12 @@ async function handlePreload(url, req, res) {
 async function handleYouTubeAudio(url, req, res) {
   const inputUrl = url.searchParams.get('url') || '';
   if (!validateYouTubeUrl(inputUrl)) { res.writeHead(400); res.end('Invalid YouTube URL'); return; }
-  const key = crypto.createHash('sha256').update(inputUrl).digest('hex');
-  const cachePath = path.join(CACHE_DIR, key + '.mp3');
+  const format = getYouTubeFormat(url.searchParams.get('format'));
+  if (!format) { res.writeHead(400); res.end('Invalid format'); return; }
+  const key = getYouTubeCacheKey(inputUrl, format);
+  const cachePath = path.join(CACHE_DIR, `${key}.${format}`);
   try {
-    if (!fs.existsSync(cachePath)) await startDownload(inputUrl, key, cachePath);
+    if (!fs.existsSync(cachePath)) await startDownload(inputUrl, key, cachePath, format);
     sendCachedAudio(cachePath, res);
   } catch (error) {
     if (!res.headersSent) { res.writeHead(502); res.end(error.message); }
