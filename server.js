@@ -1024,14 +1024,18 @@ function startDownload(inputUrl, key, cachePath, format) {
     const tempPath = format === 'mp4' ? cachePath + '.download.mp4' : cachePath + '.part';
     try { fs.unlinkSync(tempPath); } catch {}
     const { spawn } = require('child_process');
-    const ytArgs = format === 'mp4'
-      ? ['--socket-timeout', '30', '--no-warnings', '--no-playlist', '-f', 'bv*+ba/b', '--merge-output-format', 'mp4', '--remux-video', 'mp4', '-o', tempPath, inputUrl]
-      : ['--socket-timeout', '30', '--no-warnings', '--no-playlist', '-f', 'bestaudio', '-o', '-', inputUrl];
+    const ytArgs = ['--socket-timeout', '30', '--no-warnings', '--no-playlist', '--newline'];
+    if (format === 'mp4') {
+      ytArgs.push('-f', 'bv*+ba/b', '--merge-output-format', 'mp4', '--remux-video', 'mp4', '-o', tempPath, inputUrl);
+    } else {
+      ytArgs.push('-f', 'bestaudio', '-o', '-', inputUrl);
+    }
     if (YOUTUBE_PROXY) ytArgs.unshift('--proxy', YOUTUBE_PROXY);
     let attempts = 0;
     const run = () => {
       attempts++;
       DOWNLOAD_PROGRESS.set(key, { status: 'loading', percent: 0, attempt: attempts });
+      console.log(`[cache] ${format.toUpperCase()} download started (key=${key.slice(0, 12)}, attempt=${attempts}/3)`);
       const yt = spawn('yt-dlp', ytArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
       const ffmpeg = format === 'mp3'
         ? spawn('ffmpeg', ['-i', 'pipe:0', '-f', 'mp3', '-q:a', '5', tempPath], { stdio: ['pipe', 'ignore', 'pipe'] })
@@ -1056,15 +1060,18 @@ function startDownload(inputUrl, key, cachePath, format) {
             if (error) return reject(error);
             writeCacheMetadataEntry(key, { url: inputUrl }).then(() => {
               DOWNLOAD_PROGRESS.set(key, { status: 'complete', percent: 100 });
+              console.log(`[cache] ${format.toUpperCase()} download completed (key=${key.slice(0, 12)}, size=${fs.statSync(cachePath).size} bytes)`);
               resolve(cachePath);
             }).catch(reject);
           });
         } else if (attempts < 3) {
+          console.warn(`[cache] ${format.toUpperCase()} download attempt ${attempts}/3 failed (key=${key.slice(0, 12)}, exit=${code}); retrying`);
           try { fs.unlinkSync(tempPath); } catch {}
           setTimeout(run, attempts * 1000);
         } else {
           try { fs.unlinkSync(tempPath); } catch {}
           DOWNLOAD_PROGRESS.set(key, { status: 'error', percent: 0, attempt: attempts });
+          console.error(`[cache] ${format.toUpperCase()} download failed (key=${key.slice(0, 12)}, exit=${code})`);
           reject(new Error(`YouTube ${format.toUpperCase()} 下载失败，已重试 3 次`));
         }
       };
