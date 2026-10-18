@@ -954,6 +954,8 @@ async function handleGetAudioUrl(req, res) {
           '--socket-timeout', '30',
           '--no-warnings',
           '--no-playlist',
+          '--no-check-certificate',
+          '--legacy-server-connect',
           '--print', '%(title)s',
           '--skip-download'
         ];
@@ -1024,7 +1026,7 @@ function startDownload(inputUrl, key, cachePath, format) {
     const tempPath = format === 'mp4' ? cachePath + '.download.mp4' : cachePath + '.part';
     try { fs.unlinkSync(tempPath); } catch {}
     const { spawn } = require('child_process');
-    const ytArgs = ['--socket-timeout', '30', '--no-warnings', '--no-playlist', '--newline'];
+    const ytArgs = ['--socket-timeout', '30', '--no-warnings', '--no-playlist', '--newline', '--no-check-certificate', '--legacy-server-connect'];
     if (format === 'mp4') {
       ytArgs.push('--concurrent-fragments', '4', '-f', 'bv[height<=720]+ba/bv+ba', '--merge-output-format', 'mp4', '--remux-video', 'mp4', '-o', tempPath, inputUrl);
     } else {

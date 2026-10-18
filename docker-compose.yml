@@ -11,6 +11,8 @@ services:
     volumes:
       - ${CACHE_DIR:-./cache}:/app/cache
       - /etc/localtime:/etc/localtime:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - music-auth
 
