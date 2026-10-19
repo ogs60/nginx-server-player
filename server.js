@@ -378,29 +378,32 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       text-align: center;
     }
     .lyrics-section {
-      padding: 15px 30px 25px;
-      border-top: 1px solid #ddd;
+      background: #fafafa;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+      padding: 12px 15px;
+      margin-bottom: 15px;
     }
     .lyrics-header {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 10px;
-      font-size: 14px;
-      color: #555;
+      margin-bottom: 8px;
+      font-size: 13px;
+      color: #667eea;
       font-weight: bold;
     }
     .lyrics-meta {
       font-size: 12px;
-      color: #aaa;
+      color: #888;
       font-weight: normal;
-      max-width: 60%;
+      max-width: 65%;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
     .lyrics-box {
-      height: 210px;
+      height: 180px;
       overflow: hidden;
       position: relative;
       -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 18%, black 82%, transparent 100%);
@@ -408,29 +411,29 @@ function getHTMLContent(startTime, visitorCount, startDate) {
     }
     .lyrics-scroll {
       transition: transform 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
-      padding: 90px 0;
+      padding: 75px 0;
       text-align: center;
     }
     .lyric-line {
-      padding: 5px 10px;
+      padding: 4px 8px;
       font-size: 13px;
-      color: #ccc;
+      color: #bbb;
       line-height: 1.8;
       transition: color 0.4s ease, font-size 0.4s ease, font-weight 0.3s ease;
     }
     .lyric-line.active {
       color: #667eea;
-      font-size: 17px;
+      font-size: 16px;
       font-weight: bold;
     }
     .lyric-line.near {
-      color: #888;
+      color: #777;
     }
     .lyrics-tip {
       text-align: center;
-      color: #ccc;
+      color: #aaa;
       font-size: 13px;
-      padding: 80px 0;
+      padding: 70px 0;
     }
   </style>
 </head>
@@ -487,6 +490,17 @@ function getHTMLContent(startTime, visitorCount, startDate) {
         </div>
         
         <div class="now-playing" id="nowPlaying">未加载媒体</div>
+        <div class="lyrics-section">
+          <div class="lyrics-header">
+            🎵 歌词
+            <span class="lyrics-meta" id="lyricsMeta"></span>
+          </div>
+          <div class="lyrics-box">
+            <div class="lyrics-scroll" id="lyricsScroll">
+              <div class="lyrics-tip">播放音乐后自动搜索歌词</div>
+            </div>
+          </div>
+        </div>
         <div id="playlist" style="background:#fff;padding:10px;border-radius:4px;margin-bottom:15px;font-size:13px;color:#555;display:none;"></div>
         <div class="loading" id="loading">⏳ 正在获取音频链接...</div>
         <div class="progress-wrap" id="progressWrap">
@@ -521,17 +535,6 @@ function getHTMLContent(startTime, visitorCount, startDate) {
           </label>
         </div>
         
-      </div>
-    </div>
-    <div class="lyrics-section">
-      <div class="lyrics-header">
-        🎵 歌词
-        <span class="lyrics-meta" id="lyricsMeta"></span>
-      </div>
-      <div class="lyrics-box">
-        <div class="lyrics-scroll" id="lyricsScroll">
-          <div class="lyrics-tip">播放音乐后自动搜索歌词</div>
-        </div>
       </div>
     </div>
   </div>
@@ -882,7 +885,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
         var activeLine = document.getElementById('ll' + idx);
         var scroll = document.getElementById('lyricsScroll');
         if (activeLine && scroll) {
-          var offset = activeLine.offsetTop - 80;
+          var offset = activeLine.offsetTop - 75;
           scroll.style.transform = 'translateY(-' + Math.max(0, offset) + 'px)';
         }
       }
