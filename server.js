@@ -649,14 +649,44 @@ function getHTMLContent(startTime, visitorCount, startDate) {
         .catch(error => console.warn('在线人数更新失败:', error.message));
     }
     
+    let playlistSearchKeyword = '';
+    function onPlaylistSearch(val) {
+      playlistSearchKeyword = (val || '').trim().toLowerCase();
+      renderPlaylist();
+      const input = document.getElementById('playlistSearchInput');
+      if (input) {
+        input.focus();
+        input.selectionStart = input.selectionEnd = input.value.length;
+      }
+    }
+
     function renderPlaylist() {
       playlist.style.display = playlistItems.length ? 'block' : 'none';
-      playlist.innerHTML = '<div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button type="button" onclick="removeSelectedItems()" style="padding:5px 10px;font-size:12px;background:#dc3545">删除选中</button></div>' + playlistItems.map((item, index) =>
-        '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;' + (index === currentIndex ? 'font-weight:bold;color:#667eea;' : '') + '">' +
-        '<input type="checkbox" class="playlist-select" data-index="' + index + '" onclick="event.stopPropagation()" onchange="togglePlaylistSelection(this)"' + (item.selected ? ' checked' : '') + ' style="flex:0 0 auto;width:16px;height:16px">' +
-        '<span style="flex:1;cursor:pointer" onclick="playItem(' + index + ')" title="点击播放">' + (index + 1) + '. ' + escapeHtml(item.name) + ' <small style="color:#888">[' + (item.cached ? '本地缓存' : item.local ? '本地文件' : 'URL') + ']</small></span>' +
-        '</div>'
-      ).join('');
+      if (!playlistItems.length) {
+        playlist.innerHTML = '';
+        return;
+      }
+      const kw = playlistSearchKeyword;
+      const filtered = playlistItems.map((item, index) => ({ item, index })).filter(entry => {
+        if (!kw) return true;
+        return (entry.item.name || '').toLowerCase().includes(kw);
+      });
+
+      const headerHtml = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">' +
+        '<input type="text" id="playlistSearchInput" placeholder="🔍 搜索播放列表歌曲 (歌名/歌手)..." oninput="onPlaylistSearch(this.value)" value="' + escapeHtml(playlistSearchKeyword) + '" style="flex:1;padding:6px 10px;font-size:12px;border:1px solid #ddd;border-radius:4px;outline:none;">' +
+        '<button type="button" onclick="removeSelectedItems()" style="padding:6px 12px;font-size:12px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer;flex:0 0 auto;">删除选中</button>' +
+        '</div>';
+
+      const itemsHtml = filtered.length ? filtered.map(entry => {
+        const item = entry.item;
+        const index = entry.index;
+        return '<div style="display:flex;align-items:center;gap:8px;padding:5px 0;' + (index === currentIndex ? 'font-weight:bold;color:#667eea;' : '') + '">' +
+          '<input type="checkbox" class="playlist-select" data-index="' + index + '" onclick="event.stopPropagation()" onchange="togglePlaylistSelection(this)"' + (item.selected ? ' checked' : '') + ' style="flex:0 0 auto;width:16px;height:16px">' +
+          '<span style="flex:1;cursor:pointer" onclick="playItem(' + index + ')" title="点击播放">' + (index + 1) + '. ' + escapeHtml(item.name) + ' <small style="color:#888">[' + (item.cached ? '本地缓存' : item.local ? '本地文件' : 'URL') + ']</small></span>' +
+          '</div>';
+      }).join('') : '<div style="text-align:center;color:#888;padding:12px;font-size:12px;">未在播放列表中找到匹配歌曲</div>';
+
+      playlist.innerHTML = headerHtml + itemsHtml;
     }
 
     function escapeHtml(value) {
@@ -1605,14 +1635,14 @@ function cleanSongTitle(title) {
     s = s.replace(pat, ' ');
   }
 
-  // 2. 优先提取书名号中的歌名
-  const bookMatch = s.match(/(.*?)[《〈](.*?)[》〉]/);
+  // 2. 智能提取书名号中的歌名及周围的歌手名（支持 歌手《歌名》 和 《歌名》歌手）
+  const bookMatch = s.match(/^(.*?)[《〈](.*?)[》〉](.*)$/);
   if (bookMatch) {
-    const artist = bookMatch[1].replace(/[(\[【（].*?[)\]】）]/g, '').trim();
+    const before = bookMatch[1].replace(/[(\[【（].*?[)\]】）]/g, '').trim();
     const song = bookMatch[2].trim();
-    if (song) {
-      return (artist ? artist + ' ' : '') + song;
-    }
+    const after = bookMatch[3].replace(/[(\[【（].*?[)\]】）]/g, '').trim();
+    const artist = before || after || '';
+    if (song) return (song + (artist ? ' ' + artist : '')).trim();
   }
 
   // 3. 去掉普通括号符号，保留里面的有效歌名/歌手文字
@@ -1623,64 +1653,150 @@ function cleanSongTitle(title) {
   return s;
 }
 
-async function handleLyrics(url, res) {
-  const title = (url.searchParams.get('title') || '').trim().substring(0, 200);
-  if (!title) {
-    res.writeHead(400, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'title required' }));
-    return;
+// 酷狗音乐：国内曲库最全、支持云服务器 IP 请求且免鉴权
+async function searchKugouLyrics(cleanTitle, rawTitle) {
+  const tryQueries = [];
+  if (cleanTitle) tryQueries.push(cleanTitle);
+
+  // 针对用户在 index.json 中整理的「歌名 歌手」格式或含分隔符的情况生成拆分检索词
+  const parts = cleanTitle.split(/\s*[-_—/|｜]\s*|\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    const qComb = parts[0] + ' ' + parts.slice(1).join(' ');
+    if (!tryQueries.includes(qComb)) tryQueries.push(qComb);
+    if (!tryQueries.includes(parts[0])) tryQueries.push(parts[0]);
   }
-  const searchTitle = cleanSongTitle(title) || title;
+  if (rawTitle && !tryQueries.includes(rawTitle)) {
+    tryQueries.push(rawTitle);
+  }
+
+  for (const q of tryQueries) {
+    if (!q || !q.trim()) continue;
+    try {
+      const searchUrl = 'http://mobilecdn.kugou.com/api/v3/search/song?format=json&keyword=' + encodeURIComponent(q.trim()) + '&page=1&pagesize=5&showtype=1';
+      const data = await fetchJson(searchUrl, 5000);
+      const songs = data && data.data && data.data.info ? data.data.info : [];
+      for (const song of songs) {
+        if (!song.hash) continue;
+        if (song.songname && /伴奏|Instrumental|Karaoke/i.test(song.songname) && !/伴奏/i.test(q)) continue;
+        const lrcSearchUrl = 'http://krcs.kugou.com/search?ver=1&man=yes&client=mobi&keyword=&duration=&hash=' + song.hash;
+        const lrcSearchData = await fetchJson(lrcSearchUrl, 5000);
+        if (lrcSearchData && lrcSearchData.candidates && lrcSearchData.candidates.length) {
+          const cand = lrcSearchData.candidates[0];
+          const dlUrl = 'http://krcs.kugou.com/download?ver=1&client=mobi&id=' + cand.id + '&accesskey=' + cand.accesskey + '&fmt=lrc&charset=utf8';
+          const dlData = await fetchJson(dlUrl, 5000);
+          if (dlData && dlData.content) {
+            const lrcText = Buffer.from(dlData.content, 'base64').toString('utf8');
+            if (lrcText && lrcText.length > 20 && /\[\d{1,3}:\d{2}/.test(lrcText)) {
+              return {
+                lyrics: lrcText,
+                synced: true,
+                trackName: cand.song || song.songname || '',
+                artistName: cand.singer || song.singername || '',
+                source: 'kugou'
+              };
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Kugou lyrics fetch error for query:', q, e.message);
+    }
+  }
+  return null;
+}
+
+// 网易云音乐备用
+async function searchNeteaseLyrics(cleanTitle) {
   const neteaseHeaders = {
     'Referer': 'https://music.163.com/',
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
   };
-
-  // 主：网易云音乐（搜索前 5 首，遍历找到有同步歌词的最佳版本，过滤伴奏）
   try {
     const searchRes = await fetchJson(
-      'https://music.163.com/api/search/get/web?csrf_token=&s=' + encodeURIComponent(searchTitle) + '&type=1&offset=0&total=false&limit=5',
-      { headers: neteaseHeaders }
+      'https://music.163.com/api/search/get/web?csrf_token=&s=' + encodeURIComponent(cleanTitle) + '&type=1&offset=0&total=false&limit=5',
+      { headers: neteaseHeaders },
+      6000
     );
     const songs = searchRes && searchRes.result && searchRes.result.songs;
     if (songs && songs.length) {
       for (let i = 0; i < Math.min(songs.length, 5); i++) {
         const song = songs[i];
-        if (song.name && /伴奏|Instrumental|Karaoke/i.test(song.name) && !/伴奏/i.test(searchTitle)) continue;
+        if (song.name && /伴奏|Instrumental|Karaoke/i.test(song.name) && !/伴奏/i.test(cleanTitle)) continue;
         const lyricsRes = await fetchJson(
           'https://music.163.com/api/song/lyric?id=' + song.id + '&lv=1&kv=1&tv=-1',
-          { headers: neteaseHeaders }
+          { headers: neteaseHeaders },
+          5000
         );
         const lrc = lyricsRes && lyricsRes.lrc && lyricsRes.lrc.lyric;
         if (lrc && lrc.trim() && lrc.trim() !== '[00:00.000]\n' && lrc.length > 20) {
           const artistName = (song.artists || []).map(function(a) { return a.name; }).join(' / ');
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ lyrics: lrc, synced: true, trackName: song.name || '', artistName }));
-          return;
+          return {
+            lyrics: lrc,
+            synced: true,
+            trackName: song.name || '',
+            artistName: artistName,
+            source: 'netease'
+          };
         }
       }
     }
   } catch (e) {
     console.warn('Netease lyrics failed:', e.message);
   }
+  return null;
+}
 
-  // 备用：lrclib.net（英文歌/外文歌）
+// lrclib.net 备用（外文歌曲）
+async function searchLrclibLyrics(cleanTitle) {
   try {
-    const results = await fetchJson('https://lrclib.net/api/search?q=' + encodeURIComponent(searchTitle));
+    const results = await fetchJson('https://lrclib.net/api/search?q=' + encodeURIComponent(cleanTitle), 6000);
     if (Array.isArray(results) && results.length) {
       const best = results.find(function(r) { return r.syncedLyrics; }) || results.find(function(r) { return r.plainLyrics; }) || null;
       if (best) {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ lyrics: best.syncedLyrics || best.plainLyrics, synced: !!best.syncedLyrics, trackName: best.trackName || '', artistName: best.artistName || '' }));
-        return;
+        return {
+          lyrics: best.syncedLyrics || best.plainLyrics,
+          synced: !!best.syncedLyrics,
+          trackName: best.trackName || '',
+          artistName: best.artistName || '',
+          source: 'lrclib'
+        };
       }
     }
   } catch (e) {
     console.warn('lrclib lyrics failed:', e.message);
   }
+  return null;
+}
 
-  res.writeHead(200, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ lyrics: null }));
+async function handleLyrics(url, res) {
+  const rawTitle = (url.searchParams.get('title') || '').trim().substring(0, 200);
+  if (!rawTitle) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'title required' }));
+    return;
+  }
+  const cleanTitle = cleanSongTitle(rawTitle) || rawTitle;
+
+  // 1. 优先使用酷狗音乐（国内曲库全、云服务器绝不封禁、免鉴权）
+  let result = await searchKugouLyrics(cleanTitle, rawTitle);
+
+  // 2. 备用：网易云音乐
+  if (!result) {
+    result = await searchNeteaseLyrics(cleanTitle);
+  }
+
+  // 3. 备用：lrclib.net（外文/欧美歌曲）
+  if (!result) {
+    result = await searchLrclibLyrics(cleanTitle);
+  }
+
+  if (result) {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(result));
+  } else {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ lyrics: null }));
+  }
 }
 
 server.listen(PORT, () => {
