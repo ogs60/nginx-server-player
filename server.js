@@ -435,6 +435,22 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       font-size: 13px;
       padding: 70px 0;
     }
+    .lyric-btn {
+      background: #edf2f7;
+      color: #4a5568;
+      border: 1px solid #cbd5e0;
+      border-radius: 4px;
+      padding: 2px 7px;
+      font-size: 11px;
+      cursor: pointer;
+      line-height: 1.2;
+      transition: all 0.2s;
+    }
+    .lyric-btn:hover {
+      background: #667eea;
+      color: white;
+      border-color: #667eea;
+    }
   </style>
 </head>
 <body>
@@ -492,8 +508,23 @@ function getHTMLContent(startTime, visitorCount, startDate) {
         <div class="now-playing" id="nowPlaying">未加载媒体</div>
         <div class="lyrics-section">
           <div class="lyrics-header">
-            🎵 歌词
-            <span class="lyrics-meta" id="lyricsMeta"></span>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <span>🎵 歌词</span>
+              <button type="button" class="lyric-btn" onclick="toggleLyricSearch()" title="手动搜索歌词">🔍 搜词</button>
+            </div>
+            <div style="display:flex;align-items:center;gap:4px;">
+              <span class="lyrics-meta" id="lyricsMeta"></span>
+              <span id="offsetControls" style="display:none;align-items:center;gap:3px;font-size:11px;font-weight:normal;margin-left:6px;">
+                <button type="button" class="lyric-btn" onclick="adjustLyricOffset(-0.5)" title="歌词慢了/滞后，提前0.5秒">-0.5s</button>
+                <span id="offsetDisplay" style="color:#667eea;font-weight:bold;min-width:32px;text-align:center;">0.0s</span>
+                <button type="button" class="lyric-btn" onclick="adjustLyricOffset(0.5)" title="歌词快了/抢跑，延后0.5秒">+0.5s</button>
+                <button type="button" class="lyric-btn" onclick="resetLyricOffset()" title="重置时间偏移">重置</button>
+              </span>
+            </div>
+          </div>
+          <div id="lyricSearchRow" style="display:none;align-items:center;gap:6px;margin-bottom:8px;">
+            <input type="text" id="manualLyricInput" class="url-input" style="margin-bottom:0;padding:4px 8px;font-size:12px;height:28px;" placeholder="输入正确的 歌名 歌手 重新搜索" onkeydown="if(event.key==='Enter')submitManualLyrics()">
+            <button type="button" class="lyric-btn" onclick="submitManualLyrics()" style="padding:4px 10px;font-size:12px;height:28px;background:#667eea;color:#fff;border-color:#667eea;flex:0 0 auto;">确定</button>
           </div>
           <div class="lyrics-box">
             <div class="lyrics-scroll" id="lyricsScroll">
@@ -830,20 +861,94 @@ function getHTMLContent(startTime, visitorCount, startDate) {
     var lyricLines = [];
     var currentLyricIdx = -1;
     var lastLyricsTitle = '';
+    var userLyricOffsets = {};
+    try { userLyricOffsets = JSON.parse(localStorage.getItem('bear_lyric_offsets') || '{}'); } catch (e) {}
+
+    function getSongKey() {
+      if (currentIndex >= 0 && playlistItems[currentIndex]) {
+        var it = playlistItems[currentIndex];
+        return it.url || it.src || it.name;
+      }
+      return '';
+    }
+
+    function getCurrentSongOffset() {
+      var key = getSongKey();
+      return key && typeof userLyricOffsets[key] === 'number' ? userLyricOffsets[key] : 0;
+    }
+
+    function adjustLyricOffset(delta) {
+      var key = getSongKey();
+      if (!key) return;
+      var cur = getCurrentSongOffset();
+      var newVal = Math.round((cur + delta) * 10) / 10;
+      userLyricOffsets[key] = newVal;
+      try { localStorage.setItem('bear_lyric_offsets', JSON.stringify(userLyricOffsets)); } catch (e) {}
+      updateOffsetDisplay();
+      if (currentPlayer) updateLyricSync(currentPlayer.currentTime);
+    }
+
+    function resetLyricOffset() {
+      var key = getSongKey();
+      if (!key) return;
+      delete userLyricOffsets[key];
+      try { localStorage.setItem('bear_lyric_offsets', JSON.stringify(userLyricOffsets)); } catch (e) {}
+      updateOffsetDisplay();
+      if (currentPlayer) updateLyricSync(currentPlayer.currentTime);
+    }
+
+    function updateOffsetDisplay() {
+      var val = getCurrentSongOffset();
+      var el = document.getElementById('offsetDisplay');
+      if (el) el.textContent = (val > 0 ? '+' : '') + val.toFixed(1) + 's';
+    }
+
+    function toggleLyricSearch() {
+      var row = document.getElementById('lyricSearchRow');
+      if (!row) return;
+      var isHidden = row.style.display === 'none' || !row.style.display;
+      row.style.display = isHidden ? 'flex' : 'none';
+      if (isHidden) {
+        var input = document.getElementById('manualLyricInput');
+        if (input) {
+          var curItem = playlistItems[currentIndex];
+          input.value = curItem ? curItem.name : '';
+          input.focus();
+        }
+      }
+    }
+
+    function submitManualLyrics() {
+      var input = document.getElementById('manualLyricInput');
+      if (!input) return;
+      var query = input.value.trim();
+      if (!query) return;
+      var key = getSongKey();
+      if (key) {
+        try { localStorage.setItem('bear_manual_lyric_' + key, query); } catch (e) {}
+      }
+      var row = document.getElementById('lyricSearchRow');
+      if (row) row.style.display = 'none';
+      fetchLyrics(query, true);
+    }
 
     function parseLrc(text) {
       var lines = text.split('\\n');
       var result = [];
       var timeRe = /\\[(\\d{2}):(\\d{2})\\.(\\d{2,3})\\]/g;
+      var offsetMatch = text.match(/\\[offset:\\s*([+-]?\\d+)\\]/i);
+      var lrcOffset = offsetMatch ? parseInt(offsetMatch[1]) / 1000 : 0;
+
       for (var i = 0; i < lines.length; i++) {
         var line = lines[i];
+        if (/^\\[[a-z]+:.*\\]$/i.test(line.trim())) continue;
         var times = [];
         var m;
         timeRe.lastIndex = 0;
         while ((m = timeRe.exec(line)) !== null) {
           var msLen = m[3].length;
           var ms = msLen === 2 ? parseInt(m[3]) * 10 : parseInt(m[3]);
-          times.push(parseInt(m[1]) * 60 + parseInt(m[2]) + ms / 1000);
+          times.push(parseInt(m[1]) * 60 + parseInt(m[2]) + ms / 1000 - lrcOffset);
         }
         var t = line.replace(/\\[\\d{2}:\\d{2}\\.\\d{2,3}\\]/g, '').trim();
         if (t && times.length) {
@@ -869,9 +974,10 @@ function getHTMLContent(startTime, visitorCount, startDate) {
 
     function updateLyricSync(currentTime) {
       if (!lyricLines.length) return;
+      var adjustedTime = currentTime - getCurrentSongOffset();
       var idx = -1;
       for (var i = 0; i < lyricLines.length; i++) {
-        if (lyricLines[i].time <= currentTime) idx = i;
+        if (lyricLines[i].time <= adjustedTime) idx = i;
         else break;
       }
       if (idx === currentLyricIdx) return;
@@ -899,16 +1005,29 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       if (scroll) { scroll.innerHTML = '<div class="lyrics-tip">播放音乐后自动搜索歌词</div>'; scroll.style.transform = ''; }
       var meta = document.getElementById('lyricsMeta');
       if (meta) meta.textContent = '';
+      var oc = document.getElementById('offsetControls');
+      if (oc) oc.style.display = 'none';
+      updateOffsetDisplay();
     }
 
-    function fetchLyrics(title) {
-      if (!title || title === lastLyricsTitle) return;
+    function fetchLyrics(title, force) {
+      if (!title) return;
+      var key = getSongKey();
+      if (!force && key) {
+        var savedManual = '';
+        try { savedManual = localStorage.getItem('bear_manual_lyric_' + key); } catch (e) {}
+        if (savedManual) title = savedManual;
+      }
+      if (!force && title === lastLyricsTitle) return;
       lastLyricsTitle = title;
       lyricLines = [];
       currentLyricIdx = -1;
+      updateOffsetDisplay();
       var scroll = document.getElementById('lyricsScroll');
       var meta = document.getElementById('lyricsMeta');
-      if (scroll) scroll.innerHTML = '<div class="lyrics-tip">搜索歌词中...</div>';
+      var oc = document.getElementById('offsetControls');
+      if (oc) oc.style.display = 'none';
+      if (scroll) scroll.innerHTML = '<div class="lyrics-tip">搜索歌词中: ' + escapeHtml(title) + ' ...</div>';
       if (meta) meta.textContent = '';
       fetch('/lyrics?title=' + encodeURIComponent(title))
         .then(function(r) { return r.json(); })
@@ -917,15 +1036,17 @@ function getHTMLContent(startTime, visitorCount, startDate) {
             lyricLines = parseLrc(data.lyrics);
             renderLyricLines(lyricLines);
             if (meta) meta.textContent = (data.artistName ? data.artistName + ' · ' : '') + (data.trackName || '');
+            if (oc) oc.style.display = 'inline-flex';
+            if (currentPlayer) updateLyricSync(currentPlayer.currentTime);
           } else if (data.lyrics) {
-            if (scroll) scroll.innerHTML = '<div style="padding:10px;font-size:13px;color:#888;text-align:center;white-space:pre-line;line-height:2;max-height:190px;overflow:auto">' + escapeHtml(data.lyrics.substring(0, 1000)) + '</div>';
+            if (scroll) scroll.innerHTML = '<div style="padding:10px;font-size:13px;color:#888;text-align:center;white-space:pre-line;line-height:2;max-height:160px;overflow:auto">' + escapeHtml(data.lyrics.substring(0, 1000)) + '</div>';
             if (meta) meta.textContent = '纯文本歌词';
           } else {
-            if (scroll) scroll.innerHTML = '<div class="lyrics-tip">未找到歌词</div>';
+            if (scroll) scroll.innerHTML = '<div class="lyrics-tip">未找到歌词，可点击右上角 🔍 搜词尝试手动搜索</div>';
           }
         })
         .catch(function() {
-          if (scroll) scroll.innerHTML = '<div class="lyrics-tip">歌词加载失败</div>';
+          if (scroll) scroll.innerHTML = '<div class="lyrics-tip">歌词加载失败，请重试</div>';
         });
     }
 
@@ -1359,11 +1480,36 @@ function fetchJson(targetUrl, options, timeoutMs) {
 }
 
 function cleanSongTitle(title) {
-  return title
-    .replace(/\s*[(\[【（][^)\]】）]{0,60}[)\]】）]/g, '')
-    .replace(/\s*[|｜]\s*.*/g, '')
-    .replace(/\s*-\s*(Official\s*(MV|Video|Music\s*Video|Audio|Lyric[s]?)|MV|HD|4K|Live|完整版|高清|动态歌词|Lyrics?).*/gi, '')
-    .trim();
+  if (!title) return '';
+  let s = title;
+
+  // 1. 去除常见的视频噪音标记（中英文）
+  const junkPatterns = [
+    /[(\[【（\s]*(?:official\s*(?:music\s*)?(?:video|mv|audio)|official|mv|hd|4k|1080p|720p|live|现场版?|完整版|高清|动态歌词|歌词版|无损|超清|高画质|官方(?:完整版|高画质|mv)?|music\s*video|lyric[s]?\s*(?:video)?|audio)[)\]】）\s]*/gi,
+    /\s*[|｜].*$/g, // 去除管道符后面的附属栏目信息
+    /\s*-\s*$/g
+  ];
+
+  for (const pat of junkPatterns) {
+    s = s.replace(pat, ' ');
+  }
+
+  // 2. 优先提取书名号中的歌名
+  const bookMatch = s.match(/(.*?)[《〈](.*?)[》〉]/);
+  if (bookMatch) {
+    const artist = bookMatch[1].replace(/[(\[【（].*?[)\]】）]/g, '').trim();
+    const song = bookMatch[2].trim();
+    if (song) {
+      return (artist ? artist + ' ' : '') + song;
+    }
+  }
+
+  // 3. 去掉普通括号符号，保留里面的有效歌名/歌手文字
+  s = s.replace(/[【】\[\]()（）]/g, ' ');
+
+  // 4. 清理连续空格
+  s = s.replace(/\s+/g, ' ').trim();
+  return s;
 }
 
 async function handleLyrics(url, res) {
@@ -1379,32 +1525,35 @@ async function handleLyrics(url, res) {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
   };
 
-  // 主：网易云音乐
+  // 主：网易云音乐（搜索前 5 首，遍历找到有同步歌词的最佳版本，过滤伴奏）
   try {
     const searchRes = await fetchJson(
-      'https://music.163.com/api/search/get/web?csrf_token=&s=' + encodeURIComponent(searchTitle) + '&type=1&offset=0&total=false&limit=3',
+      'https://music.163.com/api/search/get/web?csrf_token=&s=' + encodeURIComponent(searchTitle) + '&type=1&offset=0&total=false&limit=5',
       { headers: neteaseHeaders }
     );
     const songs = searchRes && searchRes.result && searchRes.result.songs;
     if (songs && songs.length) {
-      const song = songs[0];
-      const lyricsRes = await fetchJson(
-        'https://music.163.com/api/song/lyric?id=' + song.id + '&lv=1&kv=1&tv=-1',
-        { headers: neteaseHeaders }
-      );
-      const lrc = lyricsRes && lyricsRes.lrc && lyricsRes.lrc.lyric;
-      if (lrc && lrc.trim() && lrc.trim() !== '[00:00.000]\n' && lrc.length > 20) {
-        const artistName = (song.artists || []).map(function(a) { return a.name; }).join(' / ');
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ lyrics: lrc, synced: true, trackName: song.name || '', artistName }));
-        return;
+      for (let i = 0; i < Math.min(songs.length, 5); i++) {
+        const song = songs[i];
+        if (song.name && /伴奏|Instrumental|Karaoke/i.test(song.name) && !/伴奏/i.test(searchTitle)) continue;
+        const lyricsRes = await fetchJson(
+          'https://music.163.com/api/song/lyric?id=' + song.id + '&lv=1&kv=1&tv=-1',
+          { headers: neteaseHeaders }
+        );
+        const lrc = lyricsRes && lyricsRes.lrc && lyricsRes.lrc.lyric;
+        if (lrc && lrc.trim() && lrc.trim() !== '[00:00.000]\n' && lrc.length > 20) {
+          const artistName = (song.artists || []).map(function(a) { return a.name; }).join(' / ');
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ lyrics: lrc, synced: true, trackName: song.name || '', artistName }));
+          return;
+        }
       }
     }
   } catch (e) {
     console.warn('Netease lyrics failed:', e.message);
   }
 
-  // 备用：lrclib.net（英文歌）
+  // 备用：lrclib.net（英文歌/外文歌）
   try {
     const results = await fetchJson('https://lrclib.net/api/search?q=' + encodeURIComponent(searchTitle));
     if (Array.isArray(results) && results.length) {
