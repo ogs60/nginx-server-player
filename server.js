@@ -505,6 +505,11 @@ function getHTMLContent(startTime, visitorCount, startDate) {
           <label for="singleRepeatToggle">单曲循环</label>
         </div>
         
+        <div class="button-group" style="margin-bottom: 15px;">
+          <button type="button" onclick="playPrev()" title="播放上一首">⏮ 上一曲</button>
+          <button type="button" onclick="playNext(true)" title="播放下一首">下一曲 ⏭</button>
+        </div>
+        
         <div class="now-playing" id="nowPlaying">未加载媒体</div>
         <div class="lyrics-section">
           <div class="lyrics-header">
@@ -678,9 +683,24 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       else clearLyrics();
     }
 
-    function playNext() {
+    function playPrev() {
       if (!playlistItems.length) return;
-      if (singleRepeatToggle.checked && currentIndex >= 0) {
+      if (randomToggle.checked && playlistItems.length > 1) {
+        let prevIndex;
+        do { prevIndex = Math.floor(Math.random() * playlistItems.length); } while (prevIndex === currentIndex);
+        playItem(prevIndex);
+        return;
+      }
+      let prevIndex = currentIndex - 1;
+      if (prevIndex < 0) {
+        prevIndex = playlistItems.length - 1;
+      }
+      playItem(prevIndex);
+    }
+
+    function playNext(forceNext) {
+      if (!playlistItems.length) return;
+      if (!forceNext && singleRepeatToggle.checked && currentIndex >= 0) {
         playItem(currentIndex);
         return;
       }
@@ -693,7 +713,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       const nextIndex = currentIndex + 1;
       if (nextIndex < playlistItems.length) {
         playItem(nextIndex);
-      } else if (loopToggle.checked) {
+      } else if (loopToggle.checked || forceNext) {
         playItem(0);
       }
     }
@@ -935,9 +955,10 @@ function getHTMLContent(startTime, visitorCount, startDate) {
     function parseLrc(text) {
       var lines = text.split('\\n');
       var result = [];
-      var timeRe = /\\[(\\d{2}):(\\d{2})\\.(\\d{2,3})\\]/g;
+      var timeRe = /\\[(\\d{1,3}):(\\d{2})(?:[.:](\\d{1,3}))?\\]/g;
       var offsetMatch = text.match(/\\[offset:\\s*([+-]?\\d+)\\]/i);
       var lrcOffset = offsetMatch ? parseInt(offsetMatch[1]) / 1000 : 0;
+      if (Math.abs(lrcOffset) > 30) lrcOffset = 0;
 
       for (var i = 0; i < lines.length; i++) {
         var line = lines[i];
@@ -946,11 +967,14 @@ function getHTMLContent(startTime, visitorCount, startDate) {
         var m;
         timeRe.lastIndex = 0;
         while ((m = timeRe.exec(line)) !== null) {
-          var msLen = m[3].length;
-          var ms = msLen === 2 ? parseInt(m[3]) * 10 : parseInt(m[3]);
+          var ms = 0;
+          if (m[3]) {
+            var msLen = m[3].length;
+            ms = msLen === 1 ? parseInt(m[3]) * 100 : (msLen === 2 ? parseInt(m[3]) * 10 : parseInt(m[3]));
+          }
           times.push(parseInt(m[1]) * 60 + parseInt(m[2]) + ms / 1000 - lrcOffset);
         }
-        var t = line.replace(/\\[\\d{2}:\\d{2}\\.\\d{2,3}\\]/g, '').trim();
+        var t = line.replace(/\\[\\d{1,3}:\\d{2}(?:[.:]\\d{1,3})?\\]/g, '').trim();
         if (t && times.length) {
           for (var j = 0; j < times.length; j++) result.push({ time: times[j], text: t });
         }
@@ -1050,8 +1074,8 @@ function getHTMLContent(startTime, visitorCount, startDate) {
         });
     }
 
-    audioPlayer.addEventListener('timeupdate', function() { if (currentPlayer === audioPlayer) updateLyricSync(audioPlayer.currentTime); });
-    videoPlayer.addEventListener('timeupdate', function() { if (currentPlayer === videoPlayer) updateLyricSync(videoPlayer.currentTime); });
+    audioPlayer.addEventListener('timeupdate', function() { updateLyricSync(audioPlayer.currentTime); });
+    videoPlayer.addEventListener('timeupdate', function() { updateLyricSync(videoPlayer.currentTime); });
 
     audioPlayer.addEventListener('ended', playNext);
     videoPlayer.addEventListener('ended', playNext);
