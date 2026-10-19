@@ -572,12 +572,10 @@ function getHTMLContent(startTime, visitorCount, startDate) {
         
         <div class="button-group">
           <button id="loadBtn" onclick="loadFromUrl()">加载</button>
-          <label style="flex: 1; margin: 0;">
-            <button onclick="document.querySelector('.file-input').click()" style="margin: 0; width: 100%;">
-              本地文件
-            </button>
-            <input type="file" class="file-input" accept="audio/*,video/*" multiple onchange="loadFromFiles(event)">
-          </label>
+          <button type="button" onclick="document.getElementById('fileInput').click()" style="margin: 0; flex: 1;">
+            📁 本地上传
+          </button>
+          <input type="file" id="fileInput" class="file-input" accept="audio/*,video/*" multiple onchange="loadFromFiles(event)">
         </div>
         
       </div>
@@ -872,15 +870,68 @@ function getHTMLContent(startTime, visitorCount, startDate) {
 
     async function loadFromFiles(event) {
       const files = Array.from(event.target.files || []);
-      for (const file of files) {
-        const form = new FormData();
-        form.append('file', file);
-        const response = await fetch('/cache-upload', { method: 'POST', body: form });
-        if (!response.ok) throw new Error('本地文件上传失败: ' + file.name);
-        const item = await response.json();
-        addPlaylistItem(item);
+      if (!files.length) return;
+
+      progressWrap.style.display = 'block';
+      let successCount = 0;
+
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        progressValue.style.width = '0%';
+        progressText.textContent = '正在上传 (' + (i + 1) + '/' + files.length + '): ' + file.name + ' (0%)';
+        try {
+          const item = await new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/cache-upload', true);
+            xhr.upload.onprogress = (e) => {
+              if (e.lengthComputable) {
+                const percent = Math.round((e.loaded / e.total) * 100);
+                progressValue.style.width = percent + '%';
+                progressText.textContent = '正在上传 (' + (i + 1) + '/' + files.length + '): ' + file.name + ' (' + percent + '%)';
+              }
+            };
+            xhr.onload = () => {
+              if (xhr.status >= 200 && xhr.status < 300) {
+                try {
+                  resolve(JSON.parse(xhr.responseText));
+                } catch (e) {
+                  reject(new Error('响应解析失败'));
+                }
+              } else if (xhr.status === 413) {
+                reject(new Error('文件 ' + file.name + ' 超过服务器大小限制 (413 Payload Too Large)'));
+              } else {
+                let errMsg = '上传失败';
+                try {
+                  const resJson = JSON.parse(xhr.responseText);
+                  if (resJson.error) errMsg = resJson.error;
+                } catch (e) {
+                  errMsg = xhr.responseText || xhr.statusText || errMsg;
+                }
+                reject(new Error(file.name + ' 上传失败 (' + xhr.status + '): ' + errMsg));
+              }
+            };
+            xhr.onerror = () => reject(new Error('上传网络错误: ' + file.name));
+            const form = new FormData();
+            form.append('file', file);
+            xhr.send(form);
+          });
+
+          addPlaylistItem(item);
+          successCount++;
+        } catch (err) {
+          alert(err.message);
+        }
       }
-      if (currentIndex < 0 && playlistItems.length) playItem(0);
+
+      if (successCount > 0) {
+        progressText.textContent = '上传完成！已添加 ' + successCount + ' 首';
+        progressValue.style.width = '100%';
+        setTimeout(() => { progressWrap.style.display = 'none'; }, 1500);
+        renderPlaylist();
+        if (currentIndex < 0 && playlistItems.length) playItem(0);
+      } else {
+        progressWrap.style.display = 'none';
+      }
       event.target.value = '';
     }
 
@@ -1538,9 +1589,21 @@ function getManageHTMLContent() {
 
     <div class="toolbar">
       <input type="text" id="searchKeyword" class="search-input" placeholder="🔍 快速搜索歌名、歌手或格式..." oninput="onFilterChange()">
+      <button type="button" class="btn btn-primary" onclick="document.getElementById('mcFileInput').click()">📁 本地上传</button>
+      <input type="file" id="mcFileInput" style="display:none;" accept="audio/*,video/*" multiple onchange="mcUploadFiles(event)">
       <button type="button" class="btn btn-secondary" onclick="toggleSelectAll()">全选 / 反选</button>
       <button type="button" id="batchDelBtn" class="btn btn-danger" onclick="deleteBatch()" disabled>🗑️ 批量删除 (<span id="selectedCount">0</span>)</button>
       <button type="button" class="btn btn-secondary" onclick="loadSongs()">🔄 刷新列表</button>
+    </div>
+
+    <div id="mcUploadProgress" style="display:none; margin-bottom:12px; background:#edf2f7; border-radius:6px; padding:10px 14px;">
+      <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:6px;">
+        <span id="mcUploadStatus" style="color:#4a5568; font-weight:600;">正在上传...</span>
+        <span id="mcUploadPercent" style="color:#667eea; font-weight:bold;">0%</span>
+      </div>
+      <div style="background:#cbd5e0; border-radius:4px; height:8px; overflow:hidden;">
+        <div id="mcProgressBar" style="width:0%; height:100%; background:linear-gradient(90deg, #667eea, #764ba2); transition: width 0.2s;"></div>
+      </div>
     </div>
 
     <div id="statsBar" style="font-size: 12px; color: #718096; margin-bottom: 12px; display: flex; justify-content: space-between;">
@@ -1832,6 +1895,72 @@ function getManageHTMLContent() {
       renderSongs();
     }
 
+    async function mcUploadFiles(event) {
+      const files = Array.from(event.target.files || []);
+      if (!files.length) return;
+      const progressBox = document.getElementById('mcUploadProgress');
+      const statusText = document.getElementById('mcUploadStatus');
+      const percentText = document.getElementById('mcUploadPercent');
+      const bar = document.getElementById('mcProgressBar');
+      progressBox.style.display = 'block';
+
+      let successCount = 0;
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        statusText.textContent = '正在上传 (' + (i + 1) + '/' + files.length + '): ' + file.name;
+        percentText.textContent = '0%';
+        bar.style.width = '0%';
+
+        try {
+          await new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/cache-upload', true);
+            xhr.upload.onprogress = (e) => {
+              if (e.lengthComputable) {
+                const percent = Math.round((e.loaded / e.total) * 100);
+                bar.style.width = percent + '%';
+                percentText.textContent = percent + '%';
+              }
+            };
+            xhr.onload = () => {
+              if (xhr.status >= 200 && xhr.status < 300) {
+                resolve(JSON.parse(xhr.responseText));
+              } else if (xhr.status === 413) {
+                reject(new Error('文件 ' + file.name + ' 超过服务器大小限制 (413 Payload Too Large)'));
+              } else {
+                let errMsg = '上传失败';
+                try {
+                  const resJson = JSON.parse(xhr.responseText);
+                  if (resJson.error) errMsg = resJson.error;
+                } catch (e) {
+                  errMsg = xhr.responseText || xhr.statusText || errMsg;
+                }
+                reject(new Error(file.name + ' 上传失败 (' + xhr.status + '): ' + errMsg));
+              }
+            };
+            xhr.onerror = () => reject(new Error('上传网络错误: ' + file.name));
+            const form = new FormData();
+            form.append('file', file);
+            xhr.send(form);
+          });
+          successCount++;
+        } catch (err) {
+          alert('上传出错: ' + err.message);
+        }
+      }
+
+      if (successCount > 0) {
+        statusText.textContent = '上传完成！成功添加 ' + successCount + ' 首歌曲';
+        bar.style.width = '100%';
+        percentText.textContent = '100%';
+        setTimeout(() => { progressBox.style.display = 'none'; }, 1500);
+        loadSongs();
+      } else {
+        progressBox.style.display = 'none';
+      }
+      event.target.value = '';
+    }
+
     loadSongs();
   </script>
 </body>
@@ -1946,32 +2075,91 @@ function handleCacheMetadata(req, res) {
 function handleCacheUpload(req, res) {
   const contentType = req.headers['content-type'] || '';
   const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
-  if (!boundaryMatch) { res.writeHead(400); res.end('Invalid multipart upload'); return; }
+  if (!boundaryMatch) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ success: false, error: 'Invalid multipart upload' }));
+    return;
+  }
   const boundary = Buffer.from('--' + (boundaryMatch[1] || boundaryMatch[2]));
   const chunks = [];
+
   req.on('data', chunk => chunks.push(chunk));
+  req.on('error', err => {
+    console.error('上传请求出错:', err);
+    if (!res.headersSent) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: err.message }));
+    }
+  });
+
   req.on('end', () => {
     try {
       const body = Buffer.concat(chunks);
       const start = body.indexOf(boundary);
       const headerEnd = body.indexOf(Buffer.from('\r\n\r\n'), start);
       const end = body.indexOf(boundary, headerEnd + 4);
-      if (start < 0 || headerEnd < 0 || end < 0) throw new Error('invalid upload');
-      const headers = body.slice(start, headerEnd).toString();
-      const nameMatch = headers.match(/filename="([^"]+)"/i);
-      if (!nameMatch) throw new Error('missing filename');
-      const originalName = path.basename(nameMatch[1]);
+      if (start < 0 || headerEnd < 0 || end < 0) {
+        throw new Error('无效的上传数据格式');
+      }
+
+      const headers = body.slice(start, headerEnd).toString('utf8');
+      let rawName = '';
+      const utf8NameMatch = headers.match(/filename\*=(?:UTF-8'')?([^;\r\n]+)/i);
+      if (utf8NameMatch) {
+        try {
+          rawName = decodeURIComponent(utf8NameMatch[1].replace(/^["']|["']$/g, ''));
+        } catch (e) {
+          rawName = utf8NameMatch[1];
+        }
+      }
+      if (!rawName) {
+        const nameMatch = headers.match(/filename="?([^"\r\n;]+)"?/i);
+        if (nameMatch) {
+          rawName = nameMatch[1];
+        }
+      }
+      if (!rawName) throw new Error('未获取到文件名');
+      const originalName = path.basename(rawName.replace(/\\/g, '/'));
       const ext = path.extname(originalName).toLowerCase();
-      if (!/\.(mp3|wav|m4a|aac|ogg|flac|mp4|webm|mov)$/i.test(ext)) throw new Error('unsupported file type');
-      const key = crypto.createHash('sha256').update(originalName + ':' + body.slice(headerEnd + 4, end - 2)).digest('hex');
+      if (!/\.(mp3|wav|m4a|aac|ogg|flac|mp4|webm|mov)$/i.test(ext)) {
+        throw new Error('不支持的文件格式: ' + ext);
+      }
+
+      let fileEnd = end;
+      if (fileEnd >= 2 && body[fileEnd - 2] === 0x0D && body[fileEnd - 1] === 0x0A) {
+        fileEnd -= 2;
+      } else if (fileEnd >= 1 && (body[fileEnd - 1] === 0x0A || body[fileEnd - 1] === 0x0D)) {
+        fileEnd -= 1;
+      }
+      const fileData = body.slice(headerEnd + 4, fileEnd);
+
+      const key = crypto.createHash('sha256').update(fileData).digest('hex');
       const fileName = key + ext;
-      fs.writeFileSync(path.join(CACHE_DIR, fileName), body.slice(headerEnd + 4, end - 2));
-      writeCacheMetadataEntry(key, { title: originalName, local: true }).then(() => {
-        const item = { type: ext === '.mp4' || ext === '.webm' || ext === '.mov' ? 'video' : 'audio', src: '/cache-audio?file=' + encodeURIComponent(fileName), name: originalName, cached: true, local: true };
+      const cleanTitle = originalName.replace(/\.[^.]+$/, '');
+
+      fs.writeFileSync(path.join(CACHE_DIR, fileName), fileData);
+
+      writeCacheMetadataEntry(key, { title: cleanTitle, local: true }).then(() => {
+        const item = {
+          key: key,
+          file: fileName,
+          size: fileData.length,
+          type: ext === '.mp4' || ext === '.webm' || ext === '.mov' ? 'video' : 'audio',
+          src: '/cache-audio?file=' + encodeURIComponent(fileName),
+          name: cleanTitle,
+          cached: true,
+          local: true
+        };
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(item));
+      }).catch(err => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: '写入元数据失败: ' + err.message }));
       });
-    } catch (error) { res.writeHead(400); res.end(error.message); }
+    } catch (error) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: error.message }));
+    }
   });
 }
 function handleCacheDelete(req, res) {
