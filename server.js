@@ -174,7 +174,7 @@ const server = http.createServer((req, res) => {
     
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(htmlContent);
-  } else if (requestUrl.pathname === '/manage') {
+  } else if (requestUrl.pathname === '/mc') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(getManageHTMLContent());
   } else if (requestUrl.pathname === '/cache-update') {
@@ -498,10 +498,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
     </div>
     
     <div class="player-section">
-      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
-        <h2 style="margin: 0;">🎵 媒体播放器</h2>
-        <a href="/manage" style="display: inline-flex; align-items: center; gap: 4px; padding: 6px 14px; background: #667eea; color: #fff; text-decoration: none; border-radius: 4px; font-size: 13px; font-weight: bold; transition: background 0.2s;" title="打开歌曲管理页面">⚙️ 歌曲管理</a>
-      </div>
+      <h2>🎵 媒体播放器</h2>
       <div class="player-controls">
         <audio id="audioPlayer" controls style="display: none;"></audio>
         <div class="video-wrapper" id="videoWrapper" style="display: none;">
@@ -684,16 +681,14 @@ function getHTMLContent(startTime, visitorCount, startDate) {
         return (entry.item.name || '').toLowerCase().includes(kw);
       });
 
-      const headerHtml = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">' +
-        '<input type="text" id="playlistSearchInput" placeholder="🔍 搜索播放列表歌曲 (歌名/歌手)..." oninput="onPlaylistSearch(this.value)" value="' + escapeHtml(playlistSearchKeyword) + '" style="flex:1;padding:6px 10px;font-size:12px;border:1px solid #ddd;border-radius:4px;outline:none;">' +
-        '<button type="button" onclick="removeSelectedItems()" style="padding:6px 12px;font-size:12px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer;flex:0 0 auto;">删除选中</button>' +
+      const headerHtml = '<div style="margin-bottom:10px;">' +
+        '<input type="text" id="playlistSearchInput" placeholder="🔍 搜索播放列表歌曲 (歌名/歌手)..." oninput="onPlaylistSearch(this.value)" value="' + escapeHtml(playlistSearchKeyword) + '" style="width:100%;box-sizing:border-box;padding:7px 12px;font-size:12px;border:1px solid #ddd;border-radius:4px;outline:none;">' +
         '</div>';
 
       const itemsHtml = filtered.length ? filtered.map(entry => {
         const item = entry.item;
         const index = entry.index;
-        return '<div style="display:flex;align-items:center;gap:8px;padding:5px 0;' + (index === currentIndex ? 'font-weight:bold;color:#667eea;' : '') + '">' +
-          '<input type="checkbox" class="playlist-select" data-index="' + index + '" onclick="event.stopPropagation()" onchange="togglePlaylistSelection(this)"' + (item.selected ? ' checked' : '') + ' style="flex:0 0 auto;width:16px;height:16px">' +
+        return '<div style="display:flex;align-items:center;padding:5px 0;' + (index === currentIndex ? 'font-weight:bold;color:#667eea;' : '') + '">' +
           '<span style="flex:1;cursor:pointer" onclick="playItem(' + index + ')" title="点击播放">' + (index + 1) + '. ' + escapeHtml(item.name) + ' <small style="color:#888">[' + (item.cached ? '本地缓存' : item.local ? '本地文件' : 'URL') + ']</small></span>' +
           '</div>';
       }).join('') : '<div style="text-align:center;color:#888;padding:12px;font-size:12px;">未在播放列表中找到匹配歌曲</div>';
