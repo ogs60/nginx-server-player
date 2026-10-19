@@ -1307,19 +1307,27 @@ async function handleYouTubeAudio(url, req, res) {
   }
 }
 
-function fetchJson(targetUrl, timeoutMs) {
+function fetchJson(targetUrl, options, timeoutMs) {
+  if (typeof options === 'number') { timeoutMs = options; options = {}; }
   timeoutMs = timeoutMs || 8000;
+  options = options || {};
   return new Promise(function(resolve, reject) {
     let url;
     try { url = new URL(targetUrl); } catch (e) { return reject(e); }
     const client = url.protocol === 'https:' ? https : http;
     let timer;
-    const req = client.get(url, {
-      headers: { 'User-Agent': 'nginx-server-player/1.0', 'Accept': 'application/json' }
-    }, function(res) {
+    const headers = Object.assign({
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'application/json'
+    }, options.headers || {});
+    const req = client.get(url, { headers }, function(proxyRes) {
+      if (proxyRes.statusCode >= 300 && proxyRes.statusCode < 400 && proxyRes.headers.location) {
+        clearTimeout(timer);
+        return fetchJson(proxyRes.headers.location, options, timeoutMs).then(resolve).catch(reject);
+      }
       let data = '';
-      res.on('data', function(chunk) { data += chunk; });
-      res.on('end', function() {
+      proxyRes.on('data', function(chunk) { data += chunk; });
+      proxyRes.on('end', function() {
         clearTimeout(timer);
         try { resolve(JSON.parse(data)); } catch (e) { reject(e); }
       });
@@ -1329,6 +1337,14 @@ function fetchJson(targetUrl, timeoutMs) {
   });
 }
 
+function cleanSongTitle(title) {
+  return title
+    .replace(/\s*[(\[【（][^)\]】）]{0,60}[)\]】）]/g, '')
+    .replace(/\s*[|｜]\s*.*/g, '')
+    .replace(/\s*-\s*(Official\s*(MV|Video|Music\s*Video|Audio|Lyric[s]?)|MV|HD|4K|Live|完整版|高清|动态歌词|Lyrics?).*/gi, '')
+    .trim();
+}
+
 async function handleLyrics(url, res) {
   const title = (url.searchParams.get('title') || '').trim().substring(0, 200);
   if (!title) {
@@ -1336,31 +1352,54 @@ async function handleLyrics(url, res) {
     res.end(JSON.stringify({ error: 'title required' }));
     return;
   }
+  const searchTitle = cleanSongTitle(title) || title;
+  const neteaseHeaders = {
+    'Referer': 'https://music.163.com/',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+  };
+
+  // 主：网易云音乐
   try {
-    const results = await fetchJson('https://lrclib.net/api/search?q=' + encodeURIComponent(title));
-    if (!Array.isArray(results) || !results.length) {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ lyrics: null }));
-      return;
+    const searchRes = await fetchJson(
+      'https://music.163.com/api/search/get/web?csrf_token=&s=' + encodeURIComponent(searchTitle) + '&type=1&offset=0&total=false&limit=3',
+      { headers: neteaseHeaders }
+    );
+    const songs = searchRes && searchRes.result && searchRes.result.songs;
+    if (songs && songs.length) {
+      const song = songs[0];
+      const lyricsRes = await fetchJson(
+        'https://music.163.com/api/song/lyric?id=' + song.id + '&lv=1&kv=1&tv=-1',
+        { headers: neteaseHeaders }
+      );
+      const lrc = lyricsRes && lyricsRes.lrc && lyricsRes.lrc.lyric;
+      if (lrc && lrc.trim() && lrc.trim() !== '[00:00.000]\n' && lrc.length > 20) {
+        const artistName = (song.artists || []).map(function(a) { return a.name; }).join(' / ');
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ lyrics: lrc, synced: true, trackName: song.name || '', artistName }));
+        return;
+      }
     }
-    const best = results.find(r => r.syncedLyrics) || results.find(r => r.plainLyrics) || null;
-    if (!best) {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ lyrics: null }));
-      return;
-    }
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
-      lyrics: best.syncedLyrics || best.plainLyrics,
-      synced: !!best.syncedLyrics,
-      trackName: best.trackName || '',
-      artistName: best.artistName || ''
-    }));
   } catch (e) {
-    console.warn('Lyrics fetch failed:', e.message);
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ lyrics: null, error: e.message }));
+    console.warn('Netease lyrics failed:', e.message);
   }
+
+  // 备用：lrclib.net（英文歌）
+  try {
+    const results = await fetchJson('https://lrclib.net/api/search?q=' + encodeURIComponent(searchTitle));
+    if (Array.isArray(results) && results.length) {
+      const best = results.find(function(r) { return r.syncedLyrics; }) || results.find(function(r) { return r.plainLyrics; }) || null;
+      if (best) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ lyrics: best.syncedLyrics || best.plainLyrics, synced: !!best.syncedLyrics, trackName: best.trackName || '', artistName: best.artistName || '' }));
+        return;
+      }
+    }
+  } catch (e) {
+    console.warn('lrclib lyrics failed:', e.message);
+  }
+
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ lyrics: null }));
 }
 
 server.listen(PORT, () => {
