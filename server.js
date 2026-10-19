@@ -174,6 +174,15 @@ const server = http.createServer((req, res) => {
     
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(htmlContent);
+  } else if (requestUrl.pathname === '/manage') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(getManageHTMLContent());
+  } else if (requestUrl.pathname === '/cache-update') {
+    handleCacheUpdate(req, res);
+  } else if (requestUrl.pathname === '/cache-reorder') {
+    handleCacheReorder(req, res);
+  } else if (requestUrl.pathname === '/cache-batch-delete') {
+    handleCacheBatchDelete(req, res);
   } else if (requestUrl.pathname === '/online-visitors') {
     handleOnlineVisitors(req, res);
   } else if (requestUrl.pathname === '/preload') {
@@ -489,7 +498,10 @@ function getHTMLContent(startTime, visitorCount, startDate) {
     </div>
     
     <div class="player-section">
-      <h2>🎵 媒体播放器</h2>
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+        <h2 style="margin: 0;">🎵 媒体播放器</h2>
+        <a href="/manage" style="display: inline-flex; align-items: center; gap: 4px; padding: 6px 14px; background: #667eea; color: #fff; text-decoration: none; border-radius: 4px; font-size: 13px; font-weight: bold; transition: background 0.2s;" title="打开歌曲管理页面">⚙️ 歌曲管理</a>
+      </div>
       <div class="player-controls">
         <audio id="audioPlayer" controls style="display: none;"></audio>
         <div class="video-wrapper" id="videoWrapper" style="display: none;">
@@ -1218,6 +1230,619 @@ function getHTMLContent(startTime, visitorCount, startDate) {
 </html>`;
 }
 
+function getManageHTMLContent() {
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>歌曲管理 - 熊宝宝的音乐播放器</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      margin: 0;
+      padding: 20px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      color: #333;
+    }
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      background: #fff;
+      border-radius: 10px;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+      padding: 24px;
+      position: relative;
+      margin-bottom: 90px;
+    }
+    .header-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 2px solid #f0f2f5;
+      padding-bottom: 16px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    .title-group h1 {
+      margin: 0;
+      font-size: 22px;
+      color: #2d3748;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .title-group p {
+      margin: 4px 0 0;
+      font-size: 13px;
+      color: #718096;
+    }
+    .back-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 16px;
+      background: #667eea;
+      color: #fff;
+      text-decoration: none;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      transition: background 0.2s;
+    }
+    .back-btn:hover {
+      background: #5a67d8;
+    }
+    .tips-box {
+      background: #ebf8ff;
+      border-left: 4px solid #3182ce;
+      padding: 10px 14px;
+      border-radius: 4px;
+      font-size: 12px;
+      color: #2b6cb0;
+      line-height: 1.6;
+      margin-bottom: 16px;
+    }
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+    .search-input {
+      flex: 1;
+      min-width: 220px;
+      padding: 8px 12px;
+      border: 1px solid #cbd5e0;
+      border-radius: 6px;
+      font-size: 13px;
+      outline: none;
+    }
+    .search-input:focus {
+      border-color: #667eea;
+      box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.15);
+    }
+    .btn {
+      padding: 8px 14px;
+      border-radius: 6px;
+      border: none;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.2s;
+    }
+    .btn-danger {
+      background: #e53e3e;
+      color: #fff;
+    }
+    .btn-danger:hover { background: #c53030; }
+    .btn-secondary {
+      background: #edf2f7;
+      color: #4a5568;
+    }
+    .btn-secondary:hover { background: #e2e8f0; }
+    .btn-primary {
+      background: #667eea;
+      color: #fff;
+    }
+    .btn-primary:hover { background: #5a67d8; }
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .song-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .song-card {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 14px;
+      background: #f7fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      transition: all 0.2s;
+    }
+    .song-card:hover {
+      background: #fff;
+      border-color: #cbd5e0;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+    }
+    .song-card.playing {
+      background: #f0f4ff;
+      border-color: #667eea;
+    }
+    .order-badge {
+      font-size: 12px;
+      font-weight: bold;
+      color: #718096;
+      min-width: 28px;
+      text-align: center;
+    }
+    .order-btns {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .order-btn {
+      background: none;
+      border: 1px solid #cbd5e0;
+      border-radius: 3px;
+      font-size: 9px;
+      padding: 1px 4px;
+      cursor: pointer;
+      color: #4a5568;
+    }
+    .order-btn:hover {
+      background: #e2e8f0;
+    }
+    .song-info {
+      flex: 1;
+      min-width: 0;
+    }
+    .song-title-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .song-name-text {
+      font-size: 14px;
+      font-weight: 600;
+      color: #2d3748;
+      word-break: break-all;
+    }
+    .tag {
+      font-size: 11px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: #e2e8f0;
+      color: #4a5568;
+    }
+    .tag-video {
+      background: #feebc8;
+      color: #c05621;
+    }
+    .song-meta-text {
+      font-size: 12px;
+      color: #a0aec0;
+      margin-top: 3px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .song-meta-text a {
+      color: #667eea;
+      text-decoration: none;
+    }
+    .song-meta-text a:hover {
+      text-decoration: underline;
+    }
+    .song-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    .act-btn {
+      padding: 5px 10px;
+      font-size: 12px;
+      border-radius: 4px;
+      border: 1px solid #cbd5e0;
+      background: #fff;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .act-btn:hover {
+      background: #f7fafc;
+      border-color: #a0aec0;
+    }
+    .act-btn-del {
+      color: #e53e3e;
+      border-color: #fed7d7;
+    }
+    .act-btn-del:hover {
+      background: #fff5f5;
+      border-color: #e53e3e;
+    }
+    .edit-input-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex: 1;
+    }
+    .edit-input {
+      flex: 1;
+      padding: 5px 8px;
+      font-size: 13px;
+      border: 1px solid #667eea;
+      border-radius: 4px;
+      outline: none;
+    }
+    .preview-bar {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: #2d3748;
+      color: #fff;
+      padding: 10px 20px;
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      gap: 15px;
+      box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.15);
+      z-index: 1000;
+      flex-wrap: wrap;
+    }
+    .preview-bar.active {
+      display: flex;
+    }
+    .preview-info {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      max-width: 320px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .preview-bar audio {
+      height: 32px;
+      flex: 1;
+      min-width: 240px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header-bar">
+      <div class="title-group">
+        <h1>🎵 熊宝宝的音乐播放器 · 歌曲管理</h1>
+        <p>管理曲库歌曲、在线重命名、上下调整排序与批量删除</p>
+      </div>
+      <div>
+        <a href="/" class="back-btn">◀ 返回播放器</a>
+      </div>
+    </div>
+
+    <div class="tips-box">
+      💡 <strong>歌词匹配推荐格式</strong>：推荐将歌曲标题修改为「<strong>歌名 歌手</strong>」（例如：<code>相思 毛阿敏</code> 或 <code>情没有对错 鱼蛋</code>），播放器将自动以最高精准度全网检索匹配同步滚动歌词。点击右侧的「✏️ 编辑」按钮即可直接修改并保存到服务器。
+    </div>
+
+    <div class="toolbar">
+      <input type="text" id="searchKeyword" class="search-input" placeholder="🔍 快速搜索歌名、歌手或格式..." oninput="onFilterChange()">
+      <button type="button" class="btn btn-secondary" onclick="toggleSelectAll()">全选 / 反选</button>
+      <button type="button" id="batchDelBtn" class="btn btn-danger" onclick="deleteBatch()" disabled>🗑️ 批量删除 (<span id="selectedCount">0</span>)</button>
+      <button type="button" class="btn btn-secondary" onclick="loadSongs()">🔄 刷新列表</button>
+    </div>
+
+    <div id="statsBar" style="font-size: 12px; color: #718096; margin-bottom: 12px; display: flex; justify-content: space-between;">
+      <span>共 <strong id="songCount" style="color: #667eea;">0</strong> 首歌曲</span>
+      <span>总存储占用：<strong id="diskSize" style="color: #667eea;">0 MB</strong></span>
+    </div>
+
+    <div id="songList" class="song-list">
+      <div style="text-align: center; color: #a0aec0; padding: 40px 0;">⏳ 加载歌曲列表中...</div>
+    </div>
+  </div>
+
+  <div id="previewBar" class="preview-bar">
+    <div class="preview-info">
+      <span>▶ 正在试听:</span>
+      <strong id="previewTitle" style="color: #90cdf4;"></strong>
+    </div>
+    <audio id="previewAudio" controls autoplay></audio>
+    <button type="button" class="btn btn-secondary" onclick="stopPreview()" style="padding: 4px 10px; font-size: 12px;">关闭试听 ✖</button>
+  </div>
+
+  <script>
+    let songsData = [];
+    let selectedSet = new Set();
+    let editingKey = null;
+    let currentPreviewFile = '';
+
+    function formatSize(bytes) {
+      if (!bytes || isNaN(bytes)) return '0 B';
+      const units = ['B', 'KB', 'MB', 'GB'];
+      let i = 0;
+      let val = Number(bytes);
+      while (val >= 1024 && i < units.length - 1) {
+        val /= 1024;
+        i++;
+      }
+      return val.toFixed(1) + ' ' + units[i];
+    }
+
+    function escapeHtml(value) {
+      return String(value || '').replace(/[&<>'"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','\\'':'&#39;','"':'&quot;'}[char]));
+    }
+
+    function loadSongs() {
+      fetch('/cache-list')
+        .then(r => r.json())
+        .then(data => {
+          songsData = Array.isArray(data) ? data : [];
+          selectedSet.clear();
+          renderSongs();
+        })
+        .catch(err => {
+          alert('获取歌曲列表失败: ' + err.message);
+        });
+    }
+
+    function renderSongs() {
+      const container = document.getElementById('songList');
+      const kw = (document.getElementById('searchKeyword').value || '').trim().toLowerCase();
+      
+      let filtered = songsData.filter(s => {
+        if (!kw) return true;
+        const name = (s.name || '').toLowerCase();
+        const url = (s.url || '').toLowerCase();
+        return name.includes(kw) || url.includes(kw);
+      });
+
+      document.getElementById('songCount').textContent = songsData.length;
+      const totalBytes = songsData.reduce((sum, s) => sum + (Number(s.size) || 0), 0);
+      document.getElementById('diskSize').textContent = formatSize(totalBytes);
+      updateSelectedCount();
+
+      if (!filtered.length) {
+        container.innerHTML = '<div style="text-align: center; color: #a0aec0; padding: 40px 0;">' + (kw ? '未找到符合条件的歌曲' : '暂无缓存歌曲，请先在播放器中添加播放') + '</div>';
+        return;
+      }
+
+      container.innerHTML = filtered.map((song, idx) => {
+        const isEditing = (editingKey === song.key);
+        const isSelected = selectedSet.has(song.file);
+        const isPlaying = (currentPreviewFile === song.file);
+
+        let titleContent = '';
+        if (isEditing) {
+          titleContent = '<div class="edit-input-group">' +
+            '<input type="text" id="editInput_' + song.key + '" class="edit-input" value="' + escapeHtml(song.name) + '" placeholder="歌名 歌手">' +
+            '<button type="button" class="btn btn-primary" onclick="saveTitle(\\'' + song.key + '\\')">保存</button>' +
+            '<button type="button" class="btn btn-secondary" onclick="cancelEdit()">取消</button>' +
+            '</div>';
+        } else {
+          titleContent = '<span class="song-name-text">' + escapeHtml(song.name) + '</span>' +
+            '<span class="tag ' + (song.type === 'video' ? 'tag-video' : '') + '">' + (song.type === 'video' ? '🎬 视频' : '🎵 音频') + '</span>' +
+            (song.local ? '<span class="tag">本地</span>' : '<span class="tag">网络</span>') +
+            (song.size ? '<span class="tag">' + formatSize(song.size) + '</span>' : '');
+        }
+
+        return '<div class="song-card ' + (isPlaying ? 'playing' : '') + '" id="card_' + song.key + '">' +
+          '<input type="checkbox" onchange="toggleSelect(\\'' + song.file + '\\', this.checked)" ' + (isSelected ? 'checked' : '') + ' style="width: 16px; height: 16px; cursor: pointer;">' +
+          '<div class="order-badge">' + (idx + 1) + '</div>' +
+          '<div class="order-btns">' +
+            '<button type="button" class="order-btn" title="上移" onclick="moveSong(' + idx + ', -1)" ' + (idx === 0 ? 'disabled' : '') + '>▲</button>' +
+            '<button type="button" class="order-btn" title="下移" onclick="moveSong(' + idx + ', 1)" ' + (idx === filtered.length - 1 ? 'disabled' : '') + '>▼</button>' +
+          '</div>' +
+          '<div class="song-info">' +
+            '<div class="song-title-row">' + titleContent + '</div>' +
+            (!isEditing ? '<div class="song-meta-text">' +
+              (song.url ? '<span>源地址: <a href="' + escapeHtml(song.url) + '" target="_blank" rel="noopener">打开原链接</a></span>' : '') +
+              '<span>文件: ' + escapeHtml(song.file || song.key) + '</span>' +
+            '</div>' : '') +
+          '</div>' +
+          '<div class="song-actions">' +
+            (!isEditing ? '<button type="button" class="act-btn" onclick="togglePreview(\\'' + escapeHtml(song.file) + '\\', \\'' + escapeHtml(song.name) + '\\')">' + (isPlaying ? '⏸ 暂停' : '▶ 试听') + '</button>' : '') +
+            (!isEditing ? '<button type="button" class="act-btn" onclick="startEdit(\\'' + song.key + '\\')">✏️ 编辑</button>' : '') +
+            '<button type="button" class="act-btn act-btn-del" onclick="deleteSingle(\\'' + song.file + '\\', \\'' + escapeHtml(song.name) + '\\')">🗑️ 删除</button>' +
+          '</div>' +
+        '</div>';
+      }).join('');
+    }
+
+    function onFilterChange() {
+      renderSongs();
+    }
+
+    function toggleSelect(file, checked) {
+      if (checked) selectedSet.add(file);
+      else selectedSet.delete(file);
+      updateSelectedCount();
+    }
+
+    function toggleSelectAll() {
+      const allFiles = songsData.map(s => s.file);
+      if (selectedSet.size === allFiles.length) {
+        selectedSet.clear();
+      } else {
+        allFiles.forEach(f => selectedSet.add(f));
+      }
+      renderSongs();
+    }
+
+    function updateSelectedCount() {
+      const count = selectedSet.size;
+      document.getElementById('selectedCount').textContent = count;
+      document.getElementById('batchDelBtn').disabled = (count === 0);
+    }
+
+    function startEdit(key) {
+      editingKey = key;
+      renderSongs();
+      const input = document.getElementById('editInput_' + key);
+      if (input) {
+        input.focus();
+        input.select();
+        input.addEventListener('keydown', e => {
+          if (e.key === 'Enter') saveTitle(key);
+          if (e.key === 'Escape') cancelEdit();
+        });
+      }
+    }
+
+    function cancelEdit() {
+      editingKey = null;
+      renderSongs();
+    }
+
+    function saveTitle(key) {
+      const input = document.getElementById('editInput_' + key);
+      if (!input) return;
+      const newTitle = input.value.trim();
+      if (!newTitle) {
+        alert('歌曲标题不能为空');
+        return;
+      }
+      fetch('/cache-update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key, title: newTitle })
+      })
+      .then(r => r.json())
+      .then(data => {
+        if (data.success) {
+          const item = songsData.find(s => s.key === key);
+          if (item) item.name = newTitle;
+          editingKey = null;
+          renderSongs();
+        } else {
+          alert('修改失败: ' + (data.error || '未知错误'));
+        }
+      })
+      .catch(err => alert('请求失败: ' + err.message));
+    }
+
+    function moveSong(index, delta) {
+      const newIndex = index + delta;
+      if (newIndex < 0 || newIndex >= songsData.length) return;
+      const item = songsData.splice(index, 1)[0];
+      songsData.splice(newIndex, 0, item);
+      renderSongs();
+
+      const orderedKeys = songsData.map(s => s.key);
+      fetch('/cache-reorder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keys: orderedKeys })
+      })
+      .then(r => r.json())
+      .then(data => {
+        if (!data.success) {
+          console.warn('排序同步失败:', data.error);
+        }
+      })
+      .catch(err => console.warn('排序网络错误:', err.message));
+    }
+
+    function deleteSingle(file, name) {
+      if (!confirm('确定要删除歌曲【' + name + '】吗？此操作将彻底删除缓存文件。')) return;
+      fetch('/cache-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file })
+      })
+      .then(r => r.json())
+      .then(data => {
+        if (data.success) {
+          if (currentPreviewFile === file) stopPreview();
+          selectedSet.delete(file);
+          songsData = songsData.filter(s => s.file !== file);
+          renderSongs();
+        } else {
+          alert('删除失败: ' + (data.error || '未知错误'));
+        }
+      })
+      .catch(err => alert('网络错误: ' + err.message));
+    }
+
+    function deleteBatch() {
+      const files = Array.from(selectedSet);
+      if (!files.length) return;
+      if (!confirm('确定要批量删除选中的 ' + files.length + ' 首歌曲吗？此操作不可撤销。')) return;
+      fetch('/cache-batch-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ files })
+      })
+      .then(r => r.json())
+      .then(data => {
+        if (data.success) {
+          if (files.includes(currentPreviewFile)) stopPreview();
+          songsData = songsData.filter(s => !selectedSet.has(s.file));
+          selectedSet.clear();
+          renderSongs();
+        } else {
+          alert('批量删除失败: ' + (data.error || '未知错误'));
+        }
+      })
+      .catch(err => alert('网络错误: ' + err.message));
+    }
+
+    function togglePreview(file, title) {
+      const bar = document.getElementById('previewBar');
+      const audio = document.getElementById('previewAudio');
+      if (currentPreviewFile === file) {
+        if (audio.paused) {
+          audio.play();
+        } else {
+          audio.pause();
+        }
+        renderSongs();
+        return;
+      }
+      currentPreviewFile = file;
+      document.getElementById('previewTitle').textContent = title;
+      audio.src = '/cache-audio?file=' + encodeURIComponent(file);
+      bar.classList.add('active');
+      audio.play().catch(e => console.warn(e));
+      audio.onended = () => {
+        currentPreviewFile = '';
+        renderSongs();
+      };
+      renderSongs();
+    }
+
+    function stopPreview() {
+      const bar = document.getElementById('previewBar');
+      const audio = document.getElementById('previewAudio');
+      audio.pause();
+      audio.src = '';
+      currentPreviewFile = '';
+      bar.classList.remove('active');
+      renderSongs();
+    }
+
+    loadSongs();
+  </script>
+</body>
+</html>`;
+}
+
 let metadataWriteQueue = Promise.resolve();
 
 function readCacheMetadata() {
@@ -1282,7 +1907,13 @@ function handleCacheList(res) {
     const key = file.replace(/\.[^.]+$/, '');
     const item = normalized[file] || normalized[key] || {};
     const isVideo = /\.(mp4|webm|mov)$/i.test(file);
+    const filePath = path.join(CACHE_DIR, file);
+    let size = 0;
+    try { size = fs.statSync(filePath).size; } catch (e) {}
     return {
+      key: key,
+      file: file,
+      size: size,
       order: Number(item.order) || 999999,
       type: isVideo ? 'video' : 'audio',
       src: '/cache-audio?file=' + encodeURIComponent(file),
@@ -1365,6 +1996,114 @@ function handleCacheDelete(req, res) {
     } catch (error) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: false, error: error.message }));
+    }
+  });
+}
+
+function handleCacheUpdate(req, res) {
+  let body = '';
+  req.on('data', chunk => body += chunk);
+  req.on('end', () => {
+    try {
+      const data = JSON.parse(body);
+      const key = String(data.key || '').trim();
+      if (!key || !/^[a-f0-9]{64}$/.test(key)) throw new Error('无效的歌曲标识');
+      metadataWriteQueue = metadataWriteQueue.then(() => {
+        const metadata = readCacheMetadata();
+        if (!metadata[key]) {
+          metadata[key] = {};
+        }
+        if (data.title !== undefined) {
+          metadata[key].title = String(data.title).trim();
+        }
+        if (data.order !== undefined) {
+          const ord = parseInt(data.order, 10);
+          if (!isNaN(ord)) metadata[key].order = ord;
+        }
+        const normalized = normalizeMetadataOrder(metadata);
+        const temp = CACHE_META + '.tmp';
+        fs.writeFileSync(temp, JSON.stringify(normalized, null, 2) + '\n');
+        fs.renameSync(temp, CACHE_META);
+      }).then(() => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+      }).catch(err => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: err.message }));
+      });
+    } catch (e) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: e.message }));
+    }
+  });
+}
+
+function handleCacheReorder(req, res) {
+  let body = '';
+  req.on('data', chunk => body += chunk);
+  req.on('end', () => {
+    try {
+      const data = JSON.parse(body);
+      const keys = Array.isArray(data.keys) ? data.keys : [];
+      if (!keys.length) throw new Error('缺少序号列表');
+      metadataWriteQueue = metadataWriteQueue.then(() => {
+        const metadata = readCacheMetadata();
+        keys.forEach((k, idx) => {
+          if (metadata[k]) metadata[k].order = idx + 1;
+        });
+        const normalized = normalizeMetadataOrder(metadata);
+        const temp = CACHE_META + '.tmp';
+        fs.writeFileSync(temp, JSON.stringify(normalized, null, 2) + '\n');
+        fs.renameSync(temp, CACHE_META);
+      }).then(() => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+      }).catch(err => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: err.message }));
+      });
+    } catch (e) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: e.message }));
+    }
+  });
+}
+
+function handleCacheBatchDelete(req, res) {
+  let body = '';
+  req.on('data', chunk => body += chunk);
+  req.on('end', () => {
+    try {
+      const data = JSON.parse(body);
+      const files = Array.isArray(data.files) ? data.files : [];
+      if (!files.length) throw new Error('请选择要删除的文件');
+      metadataWriteQueue = metadataWriteQueue.then(() => {
+        const metadata = readCacheMetadata();
+        files.forEach(f => {
+          const file = path.basename(String(f));
+          if (/^[a-f0-9]{64}\.(mp3|wav|m4a|aac|ogg|flac|mp4|webm|mov)$/.test(file)) {
+            const target = path.join(CACHE_DIR, file);
+            if (fs.existsSync(target)) {
+              try { fs.unlinkSync(target); } catch (e) {}
+            }
+            const key = file.replace(/\.[^.]+$/, '');
+            delete metadata[key];
+          }
+        });
+        const normalized = normalizeMetadataOrder(metadata);
+        const temp = CACHE_META + '.tmp';
+        fs.writeFileSync(temp, JSON.stringify(normalized, null, 2) + '\n');
+        fs.renameSync(temp, CACHE_META);
+      }).then(() => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+      }).catch(err => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: err.message }));
+      });
+    } catch (e) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: e.message }));
     }
   });
 }
