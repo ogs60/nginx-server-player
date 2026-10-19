@@ -182,6 +182,8 @@ const server = http.createServer((req, res) => {
     handleCacheProgress(requestUrl, res);
   } else if (requestUrl.pathname === '/get-audio-url') {
     handleGetAudioUrl(req, res);
+  } else if (requestUrl.pathname === '/lyrics') {
+    handleLyrics(requestUrl, res);
   } else {
     res.writeHead(404);
     res.end('Not Found');
@@ -361,6 +363,61 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       font-size: 12px;
       text-align: center;
     }
+    .lyrics-section {
+      padding: 15px 30px 25px;
+      border-top: 1px solid #ddd;
+    }
+    .lyrics-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+      font-size: 14px;
+      color: #555;
+      font-weight: bold;
+    }
+    .lyrics-meta {
+      font-size: 12px;
+      color: #aaa;
+      font-weight: normal;
+      max-width: 60%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .lyrics-box {
+      height: 210px;
+      overflow: hidden;
+      position: relative;
+      -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 18%, black 82%, transparent 100%);
+      mask-image: linear-gradient(to bottom, transparent 0%, black 18%, black 82%, transparent 100%);
+    }
+    .lyrics-scroll {
+      transition: transform 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+      padding: 90px 0;
+      text-align: center;
+    }
+    .lyric-line {
+      padding: 5px 10px;
+      font-size: 13px;
+      color: #ccc;
+      line-height: 1.8;
+      transition: color 0.4s ease, font-size 0.4s ease, font-weight 0.3s ease;
+    }
+    .lyric-line.active {
+      color: #667eea;
+      font-size: 17px;
+      font-weight: bold;
+    }
+    .lyric-line.near {
+      color: #888;
+    }
+    .lyrics-tip {
+      text-align: center;
+      color: #ccc;
+      font-size: 13px;
+      padding: 80px 0;
+    }
   </style>
 </head>
 <body>
@@ -450,6 +507,17 @@ function getHTMLContent(startTime, visitorCount, startDate) {
           </label>
         </div>
         
+      </div>
+    </div>
+    <div class="lyrics-section">
+      <div class="lyrics-header">
+        🎵 歌词
+        <span class="lyrics-meta" id="lyricsMeta"></span>
+      </div>
+      <div class="lyrics-box">
+        <div class="lyrics-scroll" id="lyricsScroll">
+          <div class="lyrics-tip">播放音乐后自动搜索歌词</div>
+        </div>
       </div>
     </div>
   </div>
@@ -558,6 +626,8 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       currentPlayer.loop = false;
       nowPlaying.textContent = '正在播放: ' + item.name;
       currentPlayer.play().catch(e => console.warn('自动播放被浏览器阻止:', e.message));
+      if (item.name && item.name !== item.url) fetchLyrics(item.name);
+      else clearLyrics();
     }
 
     function playNext() {
@@ -726,7 +796,10 @@ function getHTMLContent(startTime, visitorCount, startDate) {
         }
       });
       renderPlaylist();
-      if (currentMatch) nowPlaying.textContent = '正在播放: ' + title;
+      if (currentMatch) {
+        nowPlaying.textContent = '正在播放: ' + title;
+        fetchLyrics(title);
+      }
     }
     function updateCacheMetadata(item) {
       fetch('/cache-metadata', {
@@ -735,7 +808,113 @@ function getHTMLContent(startTime, visitorCount, startDate) {
         body: JSON.stringify({ url: item.url, title: item.name, format: item.format || 'mp3' })
       }).catch(error => console.warn('缓存元数据保存失败:', error.message));
     }
-    
+
+    // ===== 歌词 =====
+    var lyricLines = [];
+    var currentLyricIdx = -1;
+    var lastLyricsTitle = '';
+
+    function parseLrc(text) {
+      var lines = text.split('\\n');
+      var result = [];
+      var timeRe = /\\[(\\d{2}):(\\d{2})\\.(\\d{2,3})\\]/g;
+      for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        var times = [];
+        var m;
+        timeRe.lastIndex = 0;
+        while ((m = timeRe.exec(line)) !== null) {
+          var msLen = m[3].length;
+          var ms = msLen === 2 ? parseInt(m[3]) * 10 : parseInt(m[3]);
+          times.push(parseInt(m[1]) * 60 + parseInt(m[2]) + ms / 1000);
+        }
+        var t = line.replace(/\\[\\d{2}:\\d{2}\\.\\d{2,3}\\]/g, '').trim();
+        if (t && times.length) {
+          for (var j = 0; j < times.length; j++) result.push({ time: times[j], text: t });
+        }
+      }
+      return result.sort(function(a, b) { return a.time - b.time; });
+    }
+
+    function renderLyricLines(lines) {
+      var scroll = document.getElementById('lyricsScroll');
+      if (!scroll) return;
+      if (!lines || !lines.length) {
+        scroll.innerHTML = '<div class="lyrics-tip">未找到同步歌词</div>';
+        scroll.style.transform = '';
+        return;
+      }
+      scroll.innerHTML = lines.map(function(l, i) {
+        return '<div class="lyric-line" id="ll' + i + '">' + escapeHtml(l.text) + '</div>';
+      }).join('');
+      scroll.style.transform = '';
+    }
+
+    function updateLyricSync(currentTime) {
+      if (!lyricLines.length) return;
+      var idx = -1;
+      for (var i = 0; i < lyricLines.length; i++) {
+        if (lyricLines[i].time <= currentTime) idx = i;
+        else break;
+      }
+      if (idx === currentLyricIdx) return;
+      currentLyricIdx = idx;
+      document.querySelectorAll('.lyric-line').forEach(function(el, i) {
+        el.classList.remove('active', 'near');
+        if (i === idx) el.classList.add('active');
+        else if (Math.abs(i - idx) <= 2) el.classList.add('near');
+      });
+      if (idx >= 0) {
+        var activeLine = document.getElementById('ll' + idx);
+        var scroll = document.getElementById('lyricsScroll');
+        if (activeLine && scroll) {
+          var offset = activeLine.offsetTop - 80;
+          scroll.style.transform = 'translateY(-' + Math.max(0, offset) + 'px)';
+        }
+      }
+    }
+
+    function clearLyrics() {
+      lastLyricsTitle = '';
+      lyricLines = [];
+      currentLyricIdx = -1;
+      var scroll = document.getElementById('lyricsScroll');
+      if (scroll) { scroll.innerHTML = '<div class="lyrics-tip">播放音乐后自动搜索歌词</div>'; scroll.style.transform = ''; }
+      var meta = document.getElementById('lyricsMeta');
+      if (meta) meta.textContent = '';
+    }
+
+    function fetchLyrics(title) {
+      if (!title || title === lastLyricsTitle) return;
+      lastLyricsTitle = title;
+      lyricLines = [];
+      currentLyricIdx = -1;
+      var scroll = document.getElementById('lyricsScroll');
+      var meta = document.getElementById('lyricsMeta');
+      if (scroll) scroll.innerHTML = '<div class="lyrics-tip">搜索歌词中...</div>';
+      if (meta) meta.textContent = '';
+      fetch('/lyrics?title=' + encodeURIComponent(title))
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          if (data.lyrics && data.synced) {
+            lyricLines = parseLrc(data.lyrics);
+            renderLyricLines(lyricLines);
+            if (meta) meta.textContent = (data.artistName ? data.artistName + ' · ' : '') + (data.trackName || '');
+          } else if (data.lyrics) {
+            if (scroll) scroll.innerHTML = '<div style="padding:10px;font-size:13px;color:#888;text-align:center;white-space:pre-line;line-height:2;max-height:190px;overflow:auto">' + escapeHtml(data.lyrics.substring(0, 1000)) + '</div>';
+            if (meta) meta.textContent = '纯文本歌词';
+          } else {
+            if (scroll) scroll.innerHTML = '<div class="lyrics-tip">未找到歌词</div>';
+          }
+        })
+        .catch(function() {
+          if (scroll) scroll.innerHTML = '<div class="lyrics-tip">歌词加载失败</div>';
+        });
+    }
+
+    audioPlayer.addEventListener('timeupdate', function() { if (currentPlayer === audioPlayer) updateLyricSync(audioPlayer.currentTime); });
+    videoPlayer.addEventListener('timeupdate', function() { if (currentPlayer === videoPlayer) updateLyricSync(videoPlayer.currentTime); });
+
     audioPlayer.addEventListener('ended', playNext);
     videoPlayer.addEventListener('ended', playNext);
 
@@ -1125,6 +1304,62 @@ async function handleYouTubeAudio(url, req, res) {
     sendCachedAudio(cachePath, res);
   } catch (error) {
     if (!res.headersSent) { res.writeHead(502); res.end(error.message); }
+  }
+}
+
+function fetchJson(targetUrl, timeoutMs) {
+  timeoutMs = timeoutMs || 8000;
+  return new Promise(function(resolve, reject) {
+    let url;
+    try { url = new URL(targetUrl); } catch (e) { return reject(e); }
+    const client = url.protocol === 'https:' ? https : http;
+    let timer;
+    const req = client.get(url, {
+      headers: { 'User-Agent': 'nginx-server-player/1.0', 'Accept': 'application/json' }
+    }, function(res) {
+      let data = '';
+      res.on('data', function(chunk) { data += chunk; });
+      res.on('end', function() {
+        clearTimeout(timer);
+        try { resolve(JSON.parse(data)); } catch (e) { reject(e); }
+      });
+    });
+    req.on('error', function(err) { clearTimeout(timer); reject(err); });
+    timer = setTimeout(function() { req.destroy(); reject(new Error('lyrics fetch timeout')); }, timeoutMs);
+  });
+}
+
+async function handleLyrics(url, res) {
+  const title = (url.searchParams.get('title') || '').trim().substring(0, 200);
+  if (!title) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'title required' }));
+    return;
+  }
+  try {
+    const results = await fetchJson('https://lrclib.net/api/search?q=' + encodeURIComponent(title));
+    if (!Array.isArray(results) || !results.length) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ lyrics: null }));
+      return;
+    }
+    const best = results.find(r => r.syncedLyrics) || results.find(r => r.plainLyrics) || null;
+    if (!best) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ lyrics: null }));
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      lyrics: best.syncedLyrics || best.plainLyrics,
+      synced: !!best.syncedLyrics,
+      trackName: best.trackName || '',
+      artistName: best.artistName || ''
+    }));
+  } catch (e) {
+    console.warn('Lyrics fetch failed:', e.message);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ lyrics: null, error: e.message }));
   }
 }
 
