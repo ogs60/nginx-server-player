@@ -20,6 +20,20 @@ if (YOUTUBE_PROXY) {
     throw new Error('YOUTUBE_PROXY 必须包含协议、地址和端口，例如 http://192.168.8.100:1088');
   }
 }
+const YOUTUBE_COOKIES = process.env.YOUTUBE_COOKIES || '';
+
+function getYouTubeCookiesPath() {
+  if (YOUTUBE_COOKIES && fs.existsSync(YOUTUBE_COOKIES)) {
+    return YOUTUBE_COOKIES;
+  }
+  const inCache = path.join(CACHE_DIR, 'cookies.txt');
+  if (fs.existsSync(inCache)) return inCache;
+  const inApp = path.join('/app', 'cookies.txt');
+  if (fs.existsSync(inApp)) return inApp;
+  const inLocal = path.join(__dirname, 'cookies.txt');
+  if (fs.existsSync(inLocal)) return inLocal;
+  return null;
+}
 const DOWNLOAD_PROGRESS = new Map();
 const ONLINE_VISITOR_TIMEOUT = 2 * 60 * 1000;
 const ONLINE_VISITORS = new Map();
@@ -1136,6 +1150,8 @@ async function handleGetAudioUrl(req, res) {
           '--print', '%(title)s',
           '--skip-download'
         ];
+        const cookiesPath = getYouTubeCookiesPath();
+        if (cookiesPath) ytArgs.unshift('--cookies', cookiesPath);
         if (YOUTUBE_PROXY) ytArgs.unshift('--proxy', YOUTUBE_PROXY);
         ytArgs.push(inputUrl);
         const { stdout } = await execFileAsync('yt-dlp', ytArgs, { timeout: 70000 });
@@ -1209,12 +1225,14 @@ function startDownload(inputUrl, key, cachePath, format) {
     } else {
       ytArgs.push('-f', 'bestaudio', '-o', '-', inputUrl);
     }
+    const cookiesPath = getYouTubeCookiesPath();
+    if (cookiesPath) ytArgs.unshift('--cookies', cookiesPath);
     if (YOUTUBE_PROXY) ytArgs.unshift('--proxy', YOUTUBE_PROXY);
     let attempts = 0;
     const run = () => {
       attempts++;
       DOWNLOAD_PROGRESS.set(key, { status: 'loading', percent: 0, attempt: attempts });
-      console.log(`[cache] ${format.toUpperCase()} download started (key=${key.slice(0, 12)}, attempt=${attempts}/3)`);
+      console.log(`[cache] ${format.toUpperCase()} download started (key=${key.slice(0, 12)}, attempt=${attempts}/3${cookiesPath ? ', cookies=yes' : ''})`);
       const yt = spawn('yt-dlp', ytArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
       const ffmpeg = format === 'mp3'
         ? spawn('ffmpeg', ['-i', 'pipe:0', '-f', 'mp3', '-q:a', '5', tempPath], { stdio: ['pipe', 'ignore', 'pipe'] })

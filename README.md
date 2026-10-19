@@ -13,3 +13,5 @@ YouTube 缓存任务的开始、下载进度、重试和完成状态会写入主
 首页访客数按北京时间统计每日独立访客，同一 IP 和浏览器 Cookie 当天只计一次。每日数据保存在 `cache/visitors.json`，容器重启后仍保留；通过 OAuth 登录时会将用户名和邮箱一并记录。
 
 首页同时显示当前在线人数，按同一 IP 和浏览器 Cookie 去重。页面每分钟更新一次心跳，超过 2 分钟没有心跳的访客会从在线人数中移除；在线状态仅保存在内存中，服务重启后重新统计。
+
+若遇到 YouTube 提示登录/人机验证（`Sign in to confirm you’re not a bot`），可通过浏览器扩展导出 YouTube 的 `cookies.txt` 并直接放置在 `cache/cookies.txt`，程序会自动识别并使用。
