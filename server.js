@@ -507,7 +507,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
         
         <div class="button-group" style="margin-bottom: 15px;">
           <button type="button" onclick="playPrev()" title="播放上一首">⏮ 上一曲</button>
-          <button type="button" onclick="playNext(true)" title="播放下一首">下一曲 ⏭</button>
+          <button type="button" onclick="playNext()" title="播放下一首">下一曲 ⏭</button>
         </div>
         
         <div class="now-playing" id="nowPlaying">未加载媒体</div>
@@ -597,6 +597,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
     let playlistItems = [];
     let currentIndex = -1;
     let loadingUrl = false;
+    let playHistory = [];
 
     
     function isYouTube(url) {
@@ -623,7 +624,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
         videoWrapper.style.display = 'none';
         currentPlayer = audioPlayer;
       }
-      currentPlayer.loop = loopToggle.checked;
+      currentPlayer.loop = false;
     }
     
     function updateUptime() {
@@ -666,14 +667,29 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       renderPlaylist();
     }
 
-    function playItem(index) {
-      if (index >= playlistItems.length) {
+    function playItem(index, isBacktrack) {
+      if (!playlistItems.length) return;
+      if (index < 0 || index >= playlistItems.length) {
         if (loopToggle.checked && playlistItems.length) index = 0;
         else return;
       }
+      if (!isBacktrack && currentIndex >= 0 && currentIndex !== index) {
+        playHistory.push(currentIndex);
+        if (playHistory.length > 100) playHistory.shift();
+      }
+      const isSameSong = (currentIndex === index && currentPlayer && currentPlayer.src);
       currentIndex = index;
       const item = playlistItems[currentIndex];
       renderPlaylist();
+
+      if (isSameSong) {
+        currentPlayer.currentTime = 0;
+        currentPlayer.play().catch(e => console.warn('自动播放被浏览器阻止:', e.message));
+        if (item.name && item.name !== item.url) fetchLyrics(item.name);
+        updateLyricSync(0);
+        return;
+      }
+
       switchPlayer(item.type);
       currentPlayer.src = item.src;
       currentPlayer.loop = false;
@@ -685,35 +701,52 @@ function getHTMLContent(startTime, visitorCount, startDate) {
 
     function playPrev() {
       if (!playlistItems.length) return;
+      // 1. 单曲循环模式：上一曲是它自己
+      if (singleRepeatToggle.checked) {
+        playItem(currentIndex >= 0 ? currentIndex : 0, true);
+        return;
+      }
+      // 2. 有历史播放记录时，退回到上一首真实播放过的歌曲
+      while (playHistory.length > 0) {
+        const prevIdx = playHistory.pop();
+        if (prevIdx >= 0 && prevIdx < playlistItems.length && prevIdx !== currentIndex) {
+          playItem(prevIdx, true);
+          return;
+        }
+      }
+      // 3. 历史记录为空时的兜底处理
       if (randomToggle.checked && playlistItems.length > 1) {
         let prevIndex;
         do { prevIndex = Math.floor(Math.random() * playlistItems.length); } while (prevIndex === currentIndex);
-        playItem(prevIndex);
+        playItem(prevIndex, true);
         return;
       }
       let prevIndex = currentIndex - 1;
       if (prevIndex < 0) {
         prevIndex = playlistItems.length - 1;
       }
-      playItem(prevIndex);
+      playItem(prevIndex, true);
     }
 
-    function playNext(forceNext) {
+    function playNext() {
       if (!playlistItems.length) return;
-      if (!forceNext && singleRepeatToggle.checked && currentIndex >= 0) {
-        playItem(currentIndex);
+      // 1. 单曲循环模式：下一曲也是它自己
+      if (singleRepeatToggle.checked) {
+        playItem(currentIndex >= 0 ? currentIndex : 0);
         return;
       }
+      // 2. 随机播放模式：随机选下一首
       if (randomToggle.checked && playlistItems.length > 1) {
         let nextIndex;
         do { nextIndex = Math.floor(Math.random() * playlistItems.length); } while (nextIndex === currentIndex);
         playItem(nextIndex);
         return;
       }
+      // 3. 列表播放模式：按顺序下一曲，到底回到第0首
       const nextIndex = currentIndex + 1;
       if (nextIndex < playlistItems.length) {
         playItem(nextIndex);
-      } else if (loopToggle.checked || forceNext) {
+      } else {
         playItem(0);
       }
     }
@@ -812,13 +845,17 @@ function getHTMLContent(startTime, visitorCount, startDate) {
         if (selected.has(index) && item.local && item.src.startsWith('blob:')) URL.revokeObjectURL(item.src);
       });
       playlistItems = playlistItems.filter((item, index) => !selected.has(index));
+      playHistory = playHistory
+        .filter(idx => !selected.has(idx))
+        .map(idx => idx - selectedIndexes.filter(s => s < idx).length);
       if (wasCurrentDeleted) {
         audioPlayer.pause();
         videoPlayer.pause();
         audioPlayer.src = '';
         videoPlayer.src = '';
-        currentIndex = Math.min(currentIndex, playlistItems.length - 1);
-        if (playlistItems.length) playItem(Math.max(0, currentIndex));
+        const targetIndex = Math.min(currentIndex, playlistItems.length - 1);
+        currentIndex = -1;
+        if (playlistItems.length) playItem(Math.max(0, targetIndex));
         else nowPlaying.textContent = '未加载媒体';
       } else {
         currentIndex -= selectedIndexes.filter(index => index < currentIndex).length;
