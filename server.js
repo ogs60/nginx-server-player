@@ -207,6 +207,42 @@ const server = http.createServer((req, res) => {
     handleGetAudioUrl(req, res);
   } else if (requestUrl.pathname === '/lyrics') {
     handleLyrics(requestUrl, res);
+  } else if (requestUrl.pathname === '/manifest.json') {
+    const manifest = {
+      name: "熊宝宝的音乐播放器",
+      short_name: "熊宝宝音乐",
+      description: "简单好用的音乐与视频播放器",
+      start_url: "/",
+      display: "standalone",
+      background_color: "#667eea",
+      theme_color: "#667eea",
+      icons: [
+        {
+          src: "/logo.svg",
+          sizes: "any",
+          type: "image/svg+xml",
+          purpose: "any maskable"
+        }
+      ]
+    };
+    res.writeHead(200, { 'Content-Type': 'application/manifest+json; charset=utf-8' });
+    res.end(JSON.stringify(manifest, null, 2));
+  } else if (requestUrl.pathname === '/logo.svg') {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 140">
+      <circle cx="42" cy="38" r="25" fill="#b97845"/>
+      <circle cx="138" cy="38" r="25" fill="#b97845"/>
+      <circle cx="42" cy="38" r="13" fill="#f2c29b"/>
+      <circle cx="138" cy="38" r="13" fill="#f2c29b"/>
+      <circle cx="90" cy="76" r="55" fill="#c88750"/>
+      <circle cx="70" cy="68" r="7" fill="#342116"/>
+      <circle cx="110" cy="68" r="7" fill="#342116"/>
+      <ellipse cx="90" cy="91" rx="22" ry="17" fill="#f2c29b"/>
+      <ellipse cx="90" cy="87" rx="8" ry="6" fill="#342116"/>
+      <path d="M82 98 Q90 106 98 98" fill="none" stroke="#342116" stroke-width="4" stroke-linecap="round"/>
+      <path d="M48 117 Q90 137 132 117" fill="none" stroke="#8f542f" stroke-width="8" stroke-linecap="round"/>
+    </svg>`;
+    res.writeHead(200, { 'Content-Type': 'image/svg+xml; charset=utf-8' });
+    res.end(svg);
   } else {
     res.writeHead(404);
     res.end('Not Found');
@@ -220,6 +256,12 @@ function getHTMLContent(startTime, visitorCount, startDate) {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>熊宝宝的音乐播放器</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" type="image/svg+xml" href="/logo.svg">
+  <meta name="theme-color" content="#667eea">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -1283,6 +1325,12 @@ function getManageHTMLContent() {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>歌曲管理 - 熊宝宝的音乐播放器</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" type="image/svg+xml" href="/logo.svg">
+  <meta name="theme-color" content="#667eea">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <style>
     * { box-sizing: border-box; }
     body {
