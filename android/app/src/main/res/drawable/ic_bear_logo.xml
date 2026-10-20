@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="0.5"
+        android:scaleY="0.5"
+        android:translateX="9"
+        android:translateY="19">
+        <!-- Ears -->
+        <path android:fillColor="#b97845" android:pathData="M 42,38 m -25,0 a 25,25 0 1,0 50,0 a 25,25 0 1,0 -50,0"/>
+        <path android:fillColor="#b97845" android:pathData="M 138,38 m -25,0 a 25,25 0 1,0 50,0 a 25,25 0 1,0 -50,0"/>
+        <path android:fillColor="#f2c29b" android:pathData="M 42,38 m -13,0 a 13,13 0 1,0 26,0 a 13,13 0 1,0 -26,0"/>
+        <path android:fillColor="#f2c29b" android:pathData="M 138,38 m -13,0 a 13,13 0 1,0 26,0 a 13,13 0 1,0 -26,0"/>
+        <!-- Head -->
+        <path android:fillColor="#c88750" android:pathData="M 90,76 m -55,0 a 55,55 0 1,0 110,0 a 55,55 0 1,0 -110,0"/>
+        <!-- Eyes -->
+        <path android:fillColor="#342116" android:pathData="M 70,68 m -7,0 a 7,7 0 1,0 14,0 a 7,7 0 1,0 -14,0"/>
+        <path android:fillColor="#342116" android:pathData="M 110,68 m -7,0 a 7,7 0 1,0 14,0 a 7,7 0 1,0 -14,0"/>
+        <!-- Snout -->
+        <path android:fillColor="#f2c29b" android:pathData="M 90,91 m -22,0 a 22,17 0 1,0 44,0 a 22,17 0 1,0 -44,0"/>
+        <!-- Nose -->
+        <path android:fillColor="#342116" android:pathData="M 90,87 m -8,0 a 8,6 0 1,0 16,0 a 8,6 0 1,0 -16,0"/>
+        <!-- Mouth -->
+        <path android:strokeColor="#342116" android:strokeWidth="4" android:strokeLineCap="round" android:pathData="M 82,98 Q 90,106 98,98"/>
+        <!-- Collar -->
+        <path android:strokeColor="#8f542f" android:strokeWidth="8" android:strokeLineCap="round" android:pathData="M 48,117 Q 90,137 132,117"/>
+    </group>
+</vector>

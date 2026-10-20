@@ -1,0 +1,6 @@
+<resources>
+    <string name="app_name">熊宝宝音乐</string>
+    <string name="net_error_title">网络连接超时或不可用</string>
+    <string name="net_error_tip">请检查手机网络设置后点击重试</string>
+    <string name="btn_retry">点击重试</string>
+</resources>

@@ -19,3 +19,13 @@ nginx/certs/localhost.pem
 # Ignore Nginx local-only configuration.
 nginx/nginx.local.conf
 
+# Ignore Android Studio build artifacts
+android/.gradle/
+android/build/
+android/*/build/
+android/.idea/
+android/*.iml
+android/*/*.iml
+android/local.properties
+android/.cxx/
+

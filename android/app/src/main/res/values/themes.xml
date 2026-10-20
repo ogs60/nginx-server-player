@@ -1,0 +1,9 @@
+<resources>
+    <style name="Theme.BearMusicPlayer" parent="Theme.MaterialComponents.Light.NoActionBar">
+        <item name="colorPrimary">@color/purple_500</item>
+        <item name="colorPrimaryVariant">@color/purple_700</item>
+        <item name="colorOnPrimary">@color/white</item>
+        <item name="android:statusBarColor">@color/purple_500</item>
+        <item name="android:windowBackground">@color/white</item>
+    </style>
+</resources>
