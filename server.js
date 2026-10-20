@@ -7,6 +7,14 @@ const { exec } = require('child_process');
 const { promisify } = require('util');
 const { PassThrough } = require('stream');
 
+process.on('uncaughtException', (err) => {
+  console.error('Global uncaughtException:', err && err.stack ? err.stack : err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Global unhandledRejection:', reason);
+});
+
 const execFileAsync = promisify(require('child_process').execFile);
 const CACHE_DIR = process.env.CACHE_DIR || '/app/cache';
 const CACHE_META = path.join(CACHE_DIR, 'index.json');
@@ -159,14 +167,12 @@ function handleOnlineVisitors(req, res) {
 const server = http.createServer((req, res) => {
   const requestUrl = new URL(req.url, 'http://localhost');
   if (requestUrl.pathname === '/') {
-    let currentVisitorNumber;
+    let currentVisitorNumber = 1;
     try {
       currentVisitorNumber = getClientVisitor(req, res);
     } catch (error) {
-      console.error('Visitor statistics error:', error.message);
-      res.writeHead(500);
-      res.end('Visitor statistics unavailable');
-      return;
+      console.warn('Visitor statistics warning:', error.message);
+      currentVisitorNumber = 1;
     }
     
     const startDate = new Date(startTime).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
@@ -200,7 +206,7 @@ const server = http.createServer((req, res) => {
   } else if (requestUrl.pathname === '/cache-delete') {
     handleCacheDelete(req, res);
   } else if (requestUrl.pathname === '/cache-audio') {
-    handleCacheAudio(requestUrl, res);
+    handleCacheAudio(req, res, requestUrl);
   } else if (requestUrl.pathname === '/cache-progress') {
     handleCacheProgress(requestUrl, res);
   } else if (requestUrl.pathname === '/get-audio-url') {
@@ -2338,18 +2344,92 @@ function handleCacheBatchDelete(req, res) {
     }
   });
 }
-function handleCacheAudio(url, res) {
+function streamAudioFile(req, res, filePath, contentType) {
+  if (!fs.existsSync(filePath)) {
+    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('File not found');
+    return;
+  }
+
+  let stat;
+  try {
+    stat = fs.statSync(filePath);
+  } catch (e) {
+    res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('File stat error');
+    return;
+  }
+
+  const total = stat.size;
+  const range = req && req.headers ? req.headers.range : null;
+
+  if (range) {
+    const parts = range.replace(/bytes=/, "").split("-");
+    const partialstart = parts[0];
+    const partialend = parts[1];
+
+    const start = parseInt(partialstart, 10);
+    const end = partialend ? parseInt(partialend, 10) : total - 1;
+
+    if (isNaN(start) || start >= total || (end && end >= total) || start > end) {
+      res.writeHead(416, { 'Content-Range': 'bytes */' + total });
+      res.end();
+      return;
+    }
+
+    const chunksize = (end - start) + 1;
+    res.writeHead(206, {
+      'Content-Range': 'bytes ' + start + '-' + end + '/' + total,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': chunksize,
+      'Content-Type': contentType,
+      'Cache-Control': 'public, max-age=31536000'
+    });
+
+    const stream = fs.createReadStream(filePath, { start, end });
+    stream.on('error', (err) => {
+      console.warn('Audio stream error (range):', err.message);
+      if (!res.headersSent) res.writeHead(500);
+      res.end();
+    });
+    if (req) {
+      req.on('close', () => { stream.destroy(); });
+    }
+    res.on('close', () => { stream.destroy(); });
+    stream.pipe(res);
+  } else {
+    res.writeHead(200, {
+      'Content-Length': total,
+      'Accept-Ranges': 'bytes',
+      'Content-Type': contentType,
+      'Cache-Control': 'public, max-age=31536000'
+    });
+
+    const stream = fs.createReadStream(filePath);
+    stream.on('error', (err) => {
+      console.warn('Audio stream error:', err.message);
+      if (!res.headersSent) res.writeHead(500);
+      res.end();
+    });
+    if (req) {
+      req.on('close', () => { stream.destroy(); });
+    }
+    res.on('close', () => { stream.destroy(); });
+    stream.pipe(res);
+  }
+}
+
+function handleCacheAudio(req, res, url) {
   const file = path.basename(url.searchParams.get('file') || '');
   const target = path.join(CACHE_DIR, file);
   if (!/^[a-f0-9]{64}\.(mp3|wav|m4a|aac|ogg|flac|mp4|webm|mov)$/.test(file) || !fs.existsSync(target)) {
-    res.writeHead(404);
+    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end('Cache file not found');
     return;
   }
-  const stat = fs.statSync(target);
-  const type = /\.(mp4|webm|mov)$/i.test(file) ? 'video/mp4' : 'audio/mpeg';
-  res.writeHead(200, { 'Content-Type': type, 'Content-Length': stat.size, 'Cache-Control': 'public, max-age=31536000' });
-  fs.createReadStream(target).pipe(res);
+  const ext = path.extname(file).toLowerCase();
+  const contentType = /\.(mp4|webm|mov)$/i.test(ext) ? 'video/mp4' : (ext === '.flac' ? 'audio/flac' : (ext === '.wav' ? 'audio/wav' : 'audio/mpeg'));
+  streamAudioFile(req, res, target, contentType);
 }
 
 function handleCacheProgress(url, res) {
@@ -2526,11 +2606,10 @@ function startDownload(inputUrl, key, cachePath, format) {
   return task;
 }
 
-function sendCachedAudio(cachePath, res) {
-  const stat = fs.statSync(cachePath);
-  const contentType = path.extname(cachePath).toLowerCase() === '.mp4' ? 'video/mp4' : 'audio/mpeg';
-  res.writeHead(200, { 'Content-Type': contentType, 'Content-Length': stat.size, 'Cache-Control': 'public, max-age=31536000' });
-  fs.createReadStream(cachePath).pipe(res);
+function sendCachedAudio(req, res, cachePath) {
+  const ext = path.extname(cachePath).toLowerCase();
+  const contentType = ext === '.mp4' ? 'video/mp4' : 'audio/mpeg';
+  streamAudioFile(req, res, cachePath, contentType);
 }
 
 async function handlePreload(url, req, res) {
@@ -2554,7 +2633,7 @@ async function handleYouTubeAudio(url, req, res) {
   const cachePath = path.join(CACHE_DIR, `${key}.${format}`);
   try {
     if (!fs.existsSync(cachePath)) await startDownload(inputUrl, key, cachePath, format);
-    sendCachedAudio(cachePath, res);
+    sendCachedAudio(req, res, cachePath);
   } catch (error) {
     if (!res.headersSent) { res.writeHead(502); res.end(error.message); }
   }
