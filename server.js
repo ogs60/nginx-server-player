@@ -260,7 +260,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>熊宝宝的音乐播放器</title>
   <link rel="manifest" href="/manifest.json">
   <link rel="icon" type="image/svg+xml" href="/logo.svg">
@@ -269,8 +269,11 @@ function getHTMLContent(startTime, visitorCount, startDate) {
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <style>
+    *, *:before, *:after {
+      box-sizing: border-box;
+    }
     body {
-      font-family: Arial, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       margin: 0;
       padding: 20px;
       background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -437,8 +440,8 @@ function getHTMLContent(startTime, visitorCount, startDate) {
     .lyrics-section {
       background: #fafafa;
       border: 1px solid #e2e8f0;
-      border-radius: 6px;
-      padding: 12px 15px;
+      border-radius: 8px;
+      padding: 12px 14px;
       margin-bottom: 15px;
     }
     .lyrics-header {
@@ -449,55 +452,77 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       font-size: 13px;
       color: #667eea;
       font-weight: bold;
+      flex-wrap: wrap;
+      gap: 6px;
     }
     .lyrics-meta {
       font-size: 12px;
       color: #888;
       font-weight: normal;
-      max-width: 65%;
+      max-width: 55%;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
     .lyrics-box {
-      height: 180px;
+      height: 220px;
       overflow: hidden;
       position: relative;
-      -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 18%, black 82%, transparent 100%);
-      mask-image: linear-gradient(to bottom, transparent 0%, black 18%, black 82%, transparent 100%);
+      -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 15%, black 85%, transparent 100%);
+      mask-image: linear-gradient(to bottom, transparent 0%, black 15%, black 85%, transparent 100%);
+      transition: height 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .lyrics-box.expanded {
+      height: 380px;
     }
     .lyrics-scroll {
-      transition: transform 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
-      padding: 75px 0;
+      transition: transform 0.45s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+      padding: 95px 0;
       text-align: center;
     }
+    .lyrics-box.expanded .lyrics-scroll {
+      padding: 175px 0;
+    }
     .lyric-line {
-      padding: 4px 8px;
-      font-size: 13px;
-      color: #bbb;
-      line-height: 1.8;
-      transition: color 0.4s ease, font-size 0.4s ease, font-weight 0.3s ease;
+      padding: 5px 8px;
+      font-size: 13.5px;
+      color: #a0aec0;
+      line-height: 1.7;
+      cursor: pointer;
+      border-radius: 4px;
+      transition: color 0.3s ease, font-size 0.3s ease, font-weight 0.2s ease, background-color 0.2s ease;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .lyric-line:hover {
+      color: #4a5568;
+      background: rgba(102, 126, 234, 0.05);
     }
     .lyric-line.active {
       color: #667eea;
-      font-size: 16px;
+      font-size: 16.5px;
       font-weight: bold;
+      text-shadow: 0 1px 2px rgba(102, 126, 234, 0.15);
     }
     .lyric-line.near {
-      color: #777;
+      color: #4a5568;
     }
     .lyrics-tip {
       text-align: center;
       color: #aaa;
       font-size: 13px;
-      padding: 70px 0;
+      padding: 85px 0;
+    }
+    .lyrics-box.expanded .lyrics-tip {
+      padding: 160px 0;
     }
     .lyric-btn {
       background: #edf2f7;
       color: #4a5568;
       border: 1px solid #cbd5e0;
       border-radius: 4px;
-      padding: 2px 7px;
+      padding: 3px 8px;
       font-size: 11px;
       cursor: pointer;
       line-height: 1.2;
@@ -507,6 +532,87 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       background: #667eea;
       color: white;
       border-color: #667eea;
+    }
+
+    /* 移动端与 App 屏幕响应式适配 */
+    @media (max-width: 600px) {
+      body {
+        padding: 6px 4px;
+      }
+      .container {
+        border-radius: 8px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+      }
+      .header {
+        padding: 16px 12px 14px;
+      }
+      .bear-logo {
+        width: 80px;
+        height: 64px;
+        margin-bottom: 6px;
+      }
+      .bear-title {
+        font-size: 19px;
+        margin-bottom: 6px;
+      }
+      .info {
+        margin: 5px 0;
+        font-size: 12px;
+      }
+      .label {
+        min-width: 78px;
+        margin-right: 4px;
+      }
+      .player-section {
+        padding: 12px 8px;
+      }
+      .player-section h2 {
+        font-size: 16px;
+        margin-bottom: 12px;
+      }
+      .player-controls {
+        padding: 10px 8px;
+        border-radius: 6px;
+      }
+      .checkbox-label {
+        flex-wrap: wrap;
+        gap: 6px 12px;
+        font-size: 13px;
+        margin-bottom: 12px;
+      }
+      .now-playing {
+        padding: 8px 10px;
+        font-size: 13px;
+        min-height: 36px;
+        margin-bottom: 10px;
+      }
+      .lyrics-section {
+        padding: 10px 8px;
+        margin-bottom: 12px;
+      }
+      .lyrics-box {
+        height: 250px;
+      }
+      .lyrics-box.expanded {
+        height: 420px;
+      }
+      .lyrics-scroll {
+        padding: 110px 0;
+      }
+      .lyrics-box.expanded .lyrics-scroll {
+        padding: 195px 0;
+      }
+      .lyric-line {
+        font-size: 13.5px;
+        padding: 4px 4px;
+      }
+      .lyric-line.active {
+        font-size: 16px;
+      }
+      .lyrics-meta {
+        max-width: 100%;
+        font-size: 11px;
+      }
     }
   </style>
 </head>
@@ -573,10 +679,11 @@ function getHTMLContent(startTime, visitorCount, startDate) {
             <div style="display:flex;align-items:center;gap:6px;">
               <span>🎵 歌词</span>
               <button type="button" class="lyric-btn" onclick="toggleLyricSearch()" title="手动搜索歌词">🔍 搜词</button>
+              <button type="button" class="lyric-btn" id="btnLyricExpand" onclick="toggleLyricExpand()" title="展开/收起歌词高度">⤢ 展开</button>
             </div>
-            <div style="display:flex;align-items:center;gap:4px;">
+            <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;justify-content:flex-end;">
               <span class="lyrics-meta" id="lyricsMeta"></span>
-              <span id="offsetControls" style="display:none;align-items:center;gap:3px;font-size:11px;font-weight:normal;margin-left:6px;">
+              <span id="offsetControls" style="display:none;align-items:center;gap:3px;font-size:11px;font-weight:normal;margin-left:4px;">
                 <button type="button" class="lyric-btn" onclick="adjustLyricOffset(-0.5)" title="歌词慢了/滞后，提前0.5秒">-0.5s</button>
                 <span id="offsetDisplay" style="color:#667eea;font-weight:bold;min-width:32px;text-align:center;">0.0s</span>
                 <button type="button" class="lyric-btn" onclick="adjustLyricOffset(0.5)" title="歌词快了/抢跑，延后0.5秒">+0.5s</button>
@@ -588,7 +695,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
             <input type="text" id="manualLyricInput" class="url-input" style="margin-bottom:0;padding:4px 8px;font-size:12px;height:28px;" placeholder="输入正确的 歌名 歌手 重新搜索" onkeydown="if(event.key==='Enter')submitManualLyrics()">
             <button type="button" class="lyric-btn" onclick="submitManualLyrics()" style="padding:4px 10px;font-size:12px;height:28px;background:#667eea;color:#fff;border-color:#667eea;flex:0 0 auto;">确定</button>
           </div>
-          <div class="lyrics-box">
+          <div class="lyrics-box" id="lyricsBox">
             <div class="lyrics-scroll" id="lyricsScroll">
               <div class="lyrics-tip">播放音乐后自动搜索歌词</div>
             </div>
@@ -1205,6 +1312,29 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       return result.sort(function(a, b) { return a.time - b.time; });
     }
 
+    function toggleLyricExpand() {
+      var box = document.getElementById('lyricsBox');
+      var btn = document.getElementById('btnLyricExpand');
+      if (!box) return;
+      var isExpanded = box.classList.toggle('expanded');
+      if (btn) btn.textContent = isExpanded ? '⤡ 还原' : '⤢ 展开';
+      if (currentPlayer) {
+        updateLyricSync(currentPlayer.currentTime);
+      }
+    }
+
+    function jumpToLyric(time) {
+      if (currentPlayer && !isNaN(time)) {
+        var offset = getCurrentSongOffset();
+        var target = Math.max(0, time + offset);
+        currentPlayer.currentTime = target;
+        if (currentPlayer.paused) {
+          currentPlayer.play().catch(function(e) {});
+        }
+        updateLyricSync(target);
+      }
+    }
+
     function renderLyricLines(lines) {
       var scroll = document.getElementById('lyricsScroll');
       if (!scroll) return;
@@ -1214,7 +1344,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
         return;
       }
       scroll.innerHTML = lines.map(function(l, i) {
-        return '<div class="lyric-line" id="ll' + i + '">' + escapeHtml(l.text) + '</div>';
+        return '<div class="lyric-line" id="ll' + i + '" onclick="jumpToLyric(' + l.time + ')" title="点击跳转播放">' + escapeHtml(l.text) + '</div>';
       }).join('');
       scroll.style.transform = '';
     }
@@ -1238,7 +1368,10 @@ function getHTMLContent(startTime, visitorCount, startDate) {
         var activeLine = document.getElementById('ll' + idx);
         var scroll = document.getElementById('lyricsScroll');
         if (activeLine && scroll) {
-          var offset = activeLine.offsetTop - 75;
+          var box = scroll.parentElement;
+          var boxH = box ? box.clientHeight : 220;
+          var centerOffset = (boxH - activeLine.offsetHeight) / 2;
+          var offset = activeLine.offsetTop - centerOffset;
           scroll.style.transform = 'translateY(-' + Math.max(0, offset) + 'px)';
         }
       }
