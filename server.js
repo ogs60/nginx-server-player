@@ -449,20 +449,38 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       justify-content: space-between;
       align-items: center;
       margin-bottom: 8px;
-      font-size: 13px;
+      min-height: 26px;
+    }
+    .lyrics-title-wrap {
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      flex: 1 1 auto;
+      margin-right: 8px;
+    }
+    .lyrics-title {
+      font-size: 13.5px;
       color: #667eea;
       font-weight: bold;
-      flex-wrap: wrap;
-      gap: 6px;
+      flex: 0 0 auto;
+      white-space: nowrap;
     }
     .lyrics-meta {
-      font-size: 12px;
-      color: #888;
+      font-size: 11.5px;
+      color: #718096;
       font-weight: normal;
-      max-width: 55%;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+      flex: 1 1 auto;
+      min-width: 0;
+      margin-left: 6px;
+    }
+    .lyrics-actions {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      flex: 0 0 auto;
     }
     .lyrics-box {
       height: 220px;
@@ -518,20 +536,37 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       padding: 160px 0;
     }
     .lyric-btn {
+      flex: 0 0 auto !important;
+      width: auto !important;
+      white-space: nowrap !important;
+      box-sizing: border-box;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
       background: #edf2f7;
       color: #4a5568;
       border: 1px solid #cbd5e0;
-      border-radius: 4px;
-      padding: 3px 8px;
+      border-radius: 12px;
+      padding: 0 9px;
+      height: 24px;
       font-size: 11px;
+      font-weight: 500;
       cursor: pointer;
-      line-height: 1.2;
+      line-height: 1;
       transition: all 0.2s;
+      outline: none;
+      -webkit-tap-highlight-color: transparent;
     }
     .lyric-btn:hover {
       background: #667eea;
       color: white;
       border-color: #667eea;
+    }
+    .lyric-btn:active, .lyric-btn.active {
+      background: #667eea !important;
+      color: white !important;
+      border-color: #667eea !important;
     }
 
     /* 移动端与 App 屏幕响应式适配 */
@@ -676,24 +711,27 @@ function getHTMLContent(startTime, visitorCount, startDate) {
         <div class="now-playing" id="nowPlaying">未加载媒体</div>
         <div class="lyrics-section">
           <div class="lyrics-header">
-            <div style="display:flex;align-items:center;gap:6px;">
-              <span>🎵 歌词</span>
-              <button type="button" class="lyric-btn" onclick="toggleLyricSearch()" title="手动搜索歌词">🔍 搜词</button>
+            <div class="lyrics-title-wrap">
+              <span class="lyrics-title">🎵 歌词</span>
+              <span class="lyrics-meta" id="lyricsMeta"></span>
+            </div>
+            <div class="lyrics-actions">
+              <button type="button" class="lyric-btn" id="btnLyricSearch" onclick="toggleLyricSearch()" title="手动搜索歌词">🔍 搜词</button>
+              <button type="button" class="lyric-btn" id="btnOffsetToggle" onclick="toggleOffsetControls()" title="调整歌词时间偏差" style="display:none;">⏱ 校准</button>
               <button type="button" class="lyric-btn" id="btnLyricExpand" onclick="toggleLyricExpand()" title="展开/收起歌词高度">⤢ 展开</button>
             </div>
-            <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;justify-content:flex-end;">
-              <span class="lyrics-meta" id="lyricsMeta"></span>
-              <span id="offsetControls" style="display:none;align-items:center;gap:3px;font-size:11px;font-weight:normal;margin-left:4px;">
-                <button type="button" class="lyric-btn" onclick="adjustLyricOffset(-0.5)" title="歌词慢了/滞后，提前0.5秒">-0.5s</button>
-                <span id="offsetDisplay" style="color:#667eea;font-weight:bold;min-width:32px;text-align:center;">0.0s</span>
-                <button type="button" class="lyric-btn" onclick="adjustLyricOffset(0.5)" title="歌词快了/抢跑，延后0.5秒">+0.5s</button>
-                <button type="button" class="lyric-btn" onclick="resetLyricOffset()" title="重置时间偏移">重置</button>
-              </span>
-            </div>
+          </div>
+          <div id="offsetControlsRow" style="display:none;align-items:center;justify-content:center;gap:6px;padding:6px 0;margin-bottom:8px;background:#f0f4f8;border-radius:6px;font-size:11px;">
+            <span style="color:#64748b;">时间微调:</span>
+            <button type="button" class="lyric-btn" onclick="adjustLyricOffset(-0.5)" title="歌词慢了，提前0.5秒">-0.5s 慢了</button>
+            <span id="offsetDisplay" style="color:#667eea;font-weight:bold;min-width:32px;text-align:center;">0.0s</span>
+            <button type="button" class="lyric-btn" onclick="adjustLyricOffset(0.5)" title="歌词快了，延后0.5秒">+0.5s 快了</button>
+            <button type="button" class="lyric-btn" onclick="resetLyricOffset()" title="重置时间偏移">重置</button>
           </div>
           <div id="lyricSearchRow" style="display:none;align-items:center;gap:6px;margin-bottom:8px;">
-            <input type="text" id="manualLyricInput" class="url-input" style="margin-bottom:0;padding:4px 8px;font-size:12px;height:28px;" placeholder="输入正确的 歌名 歌手 重新搜索" onkeydown="if(event.key==='Enter')submitManualLyrics()">
-            <button type="button" class="lyric-btn" onclick="submitManualLyrics()" style="padding:4px 10px;font-size:12px;height:28px;background:#667eea;color:#fff;border-color:#667eea;flex:0 0 auto;">确定</button>
+            <input type="text" id="manualLyricInput" class="url-input" style="margin-bottom:0;padding:4px 8px;font-size:12px;height:28px;flex:1;" placeholder="输入正确的 歌名 歌手 重新搜索" onkeydown="if(event.key==='Enter')submitManualLyrics()">
+            <button type="button" class="lyric-btn" onclick="submitManualLyrics()" style="padding:0 10px;height:28px;background:#667eea;color:#fff;border-color:#667eea;">确定</button>
+            <button type="button" class="lyric-btn" onclick="toggleLyricSearch()" style="padding:0 8px;height:28px;">取消</button>
           </div>
           <div class="lyrics-box" id="lyricsBox">
             <div class="lyrics-scroll" id="lyricsScroll">
@@ -1251,13 +1289,36 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       var val = getCurrentSongOffset();
       var el = document.getElementById('offsetDisplay');
       if (el) el.textContent = (val > 0 ? '+' : '') + val.toFixed(1) + 's';
+      var btn = document.getElementById('btnOffsetToggle');
+      if (btn) {
+        if (Math.abs(val) > 0.001) {
+          btn.textContent = '⏱ ' + (val > 0 ? '+' : '') + val.toFixed(1) + 's';
+          btn.classList.add('active');
+        } else {
+          btn.textContent = '⏱ 校准';
+          var row = document.getElementById('offsetControlsRow');
+          var isOpen = row && row.style.display === 'flex';
+          btn.classList.toggle('active', !!isOpen);
+        }
+      }
+    }
+
+    function toggleOffsetControls() {
+      var row = document.getElementById('offsetControlsRow');
+      var btn = document.getElementById('btnOffsetToggle');
+      if (!row) return;
+      var isHidden = row.style.display === 'none' || !row.style.display;
+      row.style.display = isHidden ? 'flex' : 'none';
+      if (btn) btn.classList.toggle('active', isHidden);
     }
 
     function toggleLyricSearch() {
       var row = document.getElementById('lyricSearchRow');
+      var btn = document.getElementById('btnLyricSearch');
       if (!row) return;
       var isHidden = row.style.display === 'none' || !row.style.display;
       row.style.display = isHidden ? 'flex' : 'none';
+      if (btn) btn.classList.toggle('active', isHidden);
       if (isHidden) {
         var input = document.getElementById('manualLyricInput');
         if (input) {
@@ -1279,6 +1340,8 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       }
       var row = document.getElementById('lyricSearchRow');
       if (row) row.style.display = 'none';
+      var btn = document.getElementById('btnLyricSearch');
+      if (btn) btn.classList.remove('active');
       fetchLyrics(query, true);
     }
 
@@ -1385,8 +1448,14 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       if (scroll) { scroll.innerHTML = '<div class="lyrics-tip">播放音乐后自动搜索歌词</div>'; scroll.style.transform = ''; }
       var meta = document.getElementById('lyricsMeta');
       if (meta) meta.textContent = '';
-      var oc = document.getElementById('offsetControls');
-      if (oc) oc.style.display = 'none';
+      var btnOffset = document.getElementById('btnOffsetToggle');
+      if (btnOffset) { btnOffset.style.display = 'none'; btnOffset.classList.remove('active'); }
+      var offsetRow = document.getElementById('offsetControlsRow');
+      if (offsetRow) offsetRow.style.display = 'none';
+      var searchRow = document.getElementById('lyricSearchRow');
+      if (searchRow) searchRow.style.display = 'none';
+      var btnSearch = document.getElementById('btnLyricSearch');
+      if (btnSearch) btnSearch.classList.remove('active');
       updateOffsetDisplay();
     }
 
@@ -1405,8 +1474,10 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       updateOffsetDisplay();
       var scroll = document.getElementById('lyricsScroll');
       var meta = document.getElementById('lyricsMeta');
-      var oc = document.getElementById('offsetControls');
-      if (oc) oc.style.display = 'none';
+      var btnOffset = document.getElementById('btnOffsetToggle');
+      if (btnOffset) btnOffset.style.display = 'none';
+      var offsetRow = document.getElementById('offsetControlsRow');
+      if (offsetRow) offsetRow.style.display = 'none';
       if (scroll) scroll.innerHTML = '<div class="lyrics-tip">搜索歌词中: ' + escapeHtml(title) + ' ...</div>';
       if (meta) meta.textContent = '';
       fetch('/lyrics?title=' + encodeURIComponent(title))
@@ -1416,13 +1487,15 @@ function getHTMLContent(startTime, visitorCount, startDate) {
             lyricLines = parseLrc(data.lyrics);
             renderLyricLines(lyricLines);
             if (meta) meta.textContent = (data.artistName ? data.artistName + ' · ' : '') + (data.trackName || '');
-            if (oc) oc.style.display = 'inline-flex';
+            if (btnOffset) btnOffset.style.display = 'inline-flex';
             if (currentPlayer) updateLyricSync(currentPlayer.currentTime);
           } else if (data.lyrics) {
-            if (scroll) scroll.innerHTML = '<div style="padding:10px;font-size:13px;color:#888;text-align:center;white-space:pre-line;line-height:2;max-height:160px;overflow:auto">' + escapeHtml(data.lyrics.substring(0, 1000)) + '</div>';
+            if (scroll) scroll.innerHTML = '<div style="padding:10px;font-size:13px;color:#888;text-align:center;white-space:pre-line;line-height:2;max-height:240px;overflow:auto">' + escapeHtml(data.lyrics.substring(0, 1000)) + '</div>';
             if (meta) meta.textContent = '纯文本歌词';
+            if (btnOffset) btnOffset.style.display = 'none';
           } else {
             if (scroll) scroll.innerHTML = '<div class="lyrics-tip">未找到歌词，可点击右上角 🔍 搜词尝试手动搜索</div>';
+            if (btnOffset) btnOffset.style.display = 'none';
           }
         })
         .catch(function() {
