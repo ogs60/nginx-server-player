@@ -712,7 +712,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
         <div class="lyrics-section">
           <div class="lyrics-header">
             <div class="lyrics-title-wrap">
-              <span class="lyrics-title">🎵 歌词</span>
+              <span class="lyrics-title">歌词</span>
               <span class="lyrics-meta" id="lyricsMeta"></span>
             </div>
             <div class="lyrics-actions">
