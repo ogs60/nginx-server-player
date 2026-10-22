@@ -938,7 +938,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
         let secondRowHtml = '';
         if (playlistPage === 1) {
           firstRowHtml = '<div style="display:flex;justify-content:flex-end;align-items:center;">' +
-            '<button type="button" onclick="changePlaylistPage(1)" style="padding:3px 8px;border:1px solid #ddd;border-radius:4px;background:#fff;cursor:pointer;">下一页 ></button>' +
+            '<button type="button" onclick="changePlaylistPage(1)" style="padding:3px 10px;border:1px solid #667eea;border-radius:4px;background:#667eea;color:#fff;cursor:pointer;">下一页</button>' +
             '</div>';
           secondRowHtml = '<div style="display:flex;justify-content:center;align-items:center;">' +
             '<span>共 ' + filtered.length + ' 首 (' + totalPages + ' 页)</span>' +
