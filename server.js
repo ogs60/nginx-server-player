@@ -873,6 +873,22 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       renderPlaylist();
     }
 
+    function jumpToPlaylistPageInput(val) {
+      const page = parseInt(val, 10);
+      if (!isNaN(page)) {
+        const kw = playlistSearchKeyword;
+        const filtered = playlistItems.map((item, index) => ({ item, index })).filter(entry => {
+          if (!kw) return true;
+          return (entry.item.name || '').toLowerCase().includes(kw);
+        });
+        const totalPages = Math.ceil(filtered.length / playlistPageSize) || 1;
+        if (page >= 1 && page <= totalPages) {
+          playlistPage = page;
+          renderPlaylist();
+        }
+      }
+    }
+
     function onPlaylistSearch(val) {
       playlistSearchKeyword = (val || '').trim().toLowerCase();
       playlistPage = 1;
@@ -918,14 +934,23 @@ function getHTMLContent(startTime, visitorCount, startDate) {
 
       let footerHtml = '';
       if (totalPages > 1) {
-        footerHtml = '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;padding-top:8px;border-top:1px solid #eee;font-size:12px;color:#666;">' +
+        footerHtml = '<div style="display:flex;flex-direction:column;gap:6px;margin-top:10px;padding-top:8px;border-top:1px solid #eee;font-size:12px;color:#666;">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;">' +
           '<button type="button" onclick="changePlaylistPage(-1)" ' + (playlistPage === 1 ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : '') + ' style="padding:3px 8px;border:1px solid #ddd;border-radius:4px;background:#fff;cursor:pointer;">上一页</button>' +
           '<span>第 ' + playlistPage + ' / ' + totalPages + ' 页 (共 ' + filtered.length + ' 首)</span>' +
-          '<div style="display:flex;gap:5px;">' +
-          (playlistPage > 1 ? '<button type="button" onclick="goToFirstPlaylistPage()" style="padding:3px 8px;border:1px solid #667eea;border-radius:4px;background:#667eea;color:#fff;cursor:pointer;">回到首页</button>' : '') +
           '<button type="button" onclick="changePlaylistPage(1)" ' + (playlistPage === totalPages ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : '') + ' style="padding:3px 8px;border:1px solid #ddd;border-radius:4px;background:#fff;cursor:pointer;">下一页</button>' +
-          '</div>' +
           '</div>';
+        
+        if (playlistPage > 1) {
+          footerHtml += '<div style="display:flex;justify-content:center;align-items:center;gap:8px;">' +
+            '<button type="button" onclick="goToFirstPlaylistPage()" style="padding:3px 8px;border:1px solid #667eea;border-radius:4px;background:#667eea;color:#fff;cursor:pointer;">回到首页</button>' +
+            '<span>跳转到:</span>' +
+            '<input type="number" min="1" max="' + totalPages + '" value="' + playlistPage + '" onchange="jumpToPlaylistPageInput(this.value)" style="width:50px;padding:2px 4px;text-align:center;border:1px solid #ddd;border-radius:4px;font-size:12px;outline:none;">' +
+            '<span>页</span>' +
+            '</div>';
+        }
+
+        footerHtml += '</div>';
       }
 
       playlist.innerHTML = headerHtml + itemsHtml + footerHtml;
