@@ -963,9 +963,11 @@ function getHTMLContent(startTime, visitorCount, startDate) {
             '</div>';
 
           footerHtml = '<div style="display:flex;flex-direction:column;gap:6px;margin-top:10px;padding-top:8px;border-top:1px solid #eee;font-size:12px;color:#666;">' +
+            (firstRowHtml ? firstRowHtml : '') +
             secondRowHtml +
             thirdRowHtml +
             '</div>';
+        }
       }
 
       playlist.innerHTML = headerHtml + itemsHtml + footerHtml;
