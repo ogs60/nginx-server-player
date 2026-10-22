@@ -860,6 +860,30 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       }
     }
 
+    let playlistPage = 1;
+    const playlistPageSize = 80;
+
+    function changePlaylistPage(delta) {
+      playlistPage += delta;
+      renderPlaylist();
+    }
+
+    function goToFirstPlaylistPage() {
+      playlistPage = 1;
+      renderPlaylist();
+    }
+
+    function onPlaylistSearch(val) {
+      playlistSearchKeyword = (val || '').trim().toLowerCase();
+      playlistPage = 1;
+      renderPlaylist();
+      const input = document.getElementById('playlistSearchInput');
+      if (input) {
+        input.focus();
+        input.selectionStart = input.selectionEnd = input.value.length;
+      }
+    }
+
     function renderPlaylist() {
       playlist.style.display = playlistItems.length ? 'block' : 'none';
       if (!playlistItems.length) {
@@ -872,11 +896,19 @@ function getHTMLContent(startTime, visitorCount, startDate) {
         return (entry.item.name || '').toLowerCase().includes(kw);
       });
 
+      const totalPages = Math.ceil(filtered.length / playlistPageSize) || 1;
+      if (playlistPage > totalPages) playlistPage = totalPages;
+      if (playlistPage < 1) playlistPage = 1;
+
+      const startIndex = (playlistPage - 1) * playlistPageSize;
+      const endIndex = Math.min(startIndex + playlistPageSize, filtered.length);
+      const pageEntries = filtered.slice(startIndex, endIndex);
+
       const headerHtml = '<div style="margin-bottom:10px;">' +
         '<input type="text" id="playlistSearchInput" placeholder="🔍 搜索播放列表歌曲 (歌名/歌手)..." oninput="onPlaylistSearch(this.value)" value="' + escapeHtml(playlistSearchKeyword) + '" style="width:100%;box-sizing:border-box;padding:7px 12px;font-size:12px;border:1px solid #ddd;border-radius:4px;outline:none;">' +
         '</div>';
 
-      const itemsHtml = filtered.length ? filtered.map(entry => {
+      const itemsHtml = pageEntries.length ? pageEntries.map(entry => {
         const item = entry.item;
         const index = entry.index;
         return '<div style="display:flex;align-items:center;padding:5px 0;' + (index === currentIndex ? 'font-weight:bold;color:#667eea;' : '') + '">' +
@@ -884,7 +916,19 @@ function getHTMLContent(startTime, visitorCount, startDate) {
           '</div>';
       }).join('') : '<div style="text-align:center;color:#888;padding:12px;font-size:12px;">未在播放列表中找到匹配歌曲</div>';
 
-      playlist.innerHTML = headerHtml + itemsHtml;
+      let footerHtml = '';
+      if (totalPages > 1) {
+        footerHtml = '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;padding-top:8px;border-top:1px solid #eee;font-size:12px;color:#666;">' +
+          '<button type="button" onclick="changePlaylistPage(-1)" ' + (playlistPage === 1 ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : '') + ' style="padding:3px 8px;border:1px solid #ddd;border-radius:4px;background:#fff;cursor:pointer;">上一页</button>' +
+          '<span>第 ' + playlistPage + ' / ' + totalPages + ' 页 (共 ' + filtered.length + ' 首)</span>' +
+          '<div style="display:flex;gap:5px;">' +
+          (playlistPage > 1 ? '<button type="button" onclick="goToFirstPlaylistPage()" style="padding:3px 8px;border:1px solid #667eea;border-radius:4px;background:#667eea;color:#fff;cursor:pointer;">回到首页</button>' : '') +
+          '<button type="button" onclick="changePlaylistPage(1)" ' + (playlistPage === totalPages ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : '') + ' style="padding:3px 8px;border:1px solid #ddd;border-radius:4px;background:#fff;cursor:pointer;">下一页</button>' +
+          '</div>' +
+          '</div>';
+      }
+
+      playlist.innerHTML = headerHtml + itemsHtml + footerHtml;
     }
 
     function escapeHtml(value) {
