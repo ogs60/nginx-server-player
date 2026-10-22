@@ -934,11 +934,14 @@ function getHTMLContent(startTime, visitorCount, startDate) {
 
       let footerHtml = '';
       if (totalPages > 1) {
+        let firstRowHtml = '';
         let secondRowHtml = '';
         if (playlistPage === 1) {
-          secondRowHtml = '<div style="display:flex;justify-content:space-between;align-items:center;">' +
-            '<span>共 ' + filtered.length + ' 首 (' + totalPages + ' 页)</span>' +
+          firstRowHtml = '<div style="display:flex;justify-content:flex-end;align-items:center;">' +
             '<button type="button" onclick="changePlaylistPage(1)" style="padding:3px 8px;border:1px solid #ddd;border-radius:4px;background:#fff;cursor:pointer;">下一页 ></button>' +
+            '</div>';
+          secondRowHtml = '<div style="display:flex;justify-content:center;align-items:center;">' +
+            '<span>共 ' + filtered.length + ' 首 (' + totalPages + ' 页)</span>' +
             '</div>';
         } else {
           let pagesListHtml = '';
@@ -957,6 +960,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
         }
 
         footerHtml = '<div style="display:flex;flex-direction:column;gap:6px;margin-top:10px;padding-top:8px;border-top:1px solid #eee;font-size:12px;color:#666;">' +
+          (firstRowHtml ? firstRowHtml : '') +
           secondRowHtml +
           '</div>';
       }
