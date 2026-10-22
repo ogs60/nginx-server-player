@@ -906,12 +906,12 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       const isSameSong = (currentIndex === index && currentPlayer && currentPlayer.src);
 
       if (isSameSong) {
-        currentPlayer.currentTime = 0;
-        currentPlayer.play().catch(e => console.warn('自动播放被浏览器阻止:', e.message));
-        if (playlistItems[currentIndex].name && playlistItems[currentIndex].name !== playlistItems[currentIndex].url) {
-          fetchLyrics(playlistItems[currentIndex].name);
+        if (currentPlayer.paused) {
+          currentPlayer.play().catch(e => console.warn('自动播放被浏览器阻止:', e.message));
+        } else {
+          currentPlayer.pause();
         }
-        updateLyricSync(0);
+        renderPlaylist();
         return;
       }
 
