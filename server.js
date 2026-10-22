@@ -934,18 +934,30 @@ function getHTMLContent(startTime, visitorCount, startDate) {
 
       let footerHtml = '';
       if (totalPages > 1) {
-        footerHtml = '<div style="display:flex;flex-direction:column;gap:8px;margin-top:10px;padding-top:8px;border-top:1px solid #eee;font-size:12px;color:#666;">' +
-          '<div style="display:flex;justify-content:space-between;align-items:center;">' +
-          '<button type="button" onclick="changePlaylistPage(-1)" ' + (playlistPage === 1 ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : '') + ' style="padding:3px 8px;border:1px solid #ddd;border-radius:4px;background:#fff;cursor:pointer;">上一页</button>' +
-          '<span>第 ' + playlistPage + ' / ' + totalPages + ' 页 (共 ' + filtered.length + ' 首)</span>' +
-          '<button type="button" onclick="changePlaylistPage(1)" ' + (playlistPage === totalPages ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : '') + ' style="padding:3px 8px;border:1px solid #ddd;border-radius:4px;background:#fff;cursor:pointer;">下一页</button>' +
-          '</div>' +
-          '<div style="display:flex;justify-content:center;align-items:center;gap:8px;">' +
-          '<button type="button" onclick="goToFirstPlaylistPage()" ' + (playlistPage === 1 ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : '') + ' style="padding:3px 8px;border:1px solid #667eea;border-radius:4px;background:#667eea;color:#fff;cursor:pointer;">回到首页</button>' +
-          '<span>跳转到:</span>' +
-          '<input type="number" min="1" max="' + totalPages + '" value="' + playlistPage + '" onchange="jumpToPlaylistPageInput(this.value)" style="width:50px;padding:2px 4px;text-align:center;border:1px solid #ddd;border-radius:4px;font-size:12px;outline:none;">' +
-          '<span>页</span>' +
-          '</div>' +
+        let secondRowHtml = '';
+        if (playlistPage === 1) {
+          secondRowHtml = '<div style="display:flex;justify-content:space-between;align-items:center;">' +
+            '<span>共 ' + filtered.length + ' 首 (' + totalPages + ' 页)</span>' +
+            '<button type="button" onclick="changePlaylistPage(1)" style="padding:3px 8px;border:1px solid #ddd;border-radius:4px;background:#fff;cursor:pointer;">下一页 ></button>' +
+            '</div>';
+        } else {
+          let pagesListHtml = '';
+          for (let p = 1; p <= totalPages; p++) {
+            if (p === playlistPage) {
+              pagesListHtml += '<span style="padding:2px 6px;border:1px solid #667eea;background:#667eea;color:#fff;border-radius:4px;cursor:default;">' + p + '</span>';
+            } else {
+              pagesListHtml += '<button type="button" onclick="jumpToPlaylistPageInput(' + p + ')" style="padding:2px 6px;border:1px solid #ddd;background:#fff;color:#333;border-radius:4px;cursor:pointer;">' + p + '</button>';
+            }
+          }
+          secondRowHtml = '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">' +
+            '<button type="button" onclick="changePlaylistPage(-1)" style="padding:3px 8px;border:1px solid #ddd;border-radius:4px;background:#fff;cursor:pointer;">< 上一页</button>' +
+            '<div style="display:flex;align-items:center;gap:3px;flex-wrap:wrap;">' + pagesListHtml + '</div>' +
+            '<button type="button" onclick="changePlaylistPage(1)" ' + (playlistPage === totalPages ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : '') + ' style="padding:3px 8px;border:1px solid #ddd;border-radius:4px;background:#fff;cursor:pointer;">下一页 ></button>' +
+            '</div>';
+        }
+
+        footerHtml = '<div style="display:flex;flex-direction:column;gap:6px;margin-top:10px;padding-top:8px;border-top:1px solid #eee;font-size:12px;color:#666;">' +
+          secondRowHtml +
           '</div>';
       }
 
