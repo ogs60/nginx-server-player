@@ -953,16 +953,19 @@ function getHTMLContent(startTime, visitorCount, startDate) {
             }
           }
           secondRowHtml = '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">' +
-            '<button type="button" onclick="changePlaylistPage(-1)" style="padding:3px 8px;border:1px solid #ddd;border-radius:4px;background:#fff;cursor:pointer;">< 上一页</button>' +
+            '<button type="button" onclick="changePlaylistPage(-1)" style="padding:3px 10px;border:1px solid #667eea;border-radius:4px;background:#667eea;color:#fff;cursor:pointer;">上一页</button>' +
             '<div style="display:flex;align-items:center;gap:3px;flex-wrap:wrap;">' + pagesListHtml + '</div>' +
-            '<button type="button" onclick="changePlaylistPage(1)" ' + (playlistPage === totalPages ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : '') + ' style="padding:3px 8px;border:1px solid #ddd;border-radius:4px;background:#fff;cursor:pointer;">下一页 ></button>' +
+            '<button type="button" onclick="changePlaylistPage(1)" ' + (playlistPage === totalPages ? 'disabled style="opacity:0.5;cursor:not-allowed;"' : '') + ' style="padding:3px 10px;border:1px solid #667eea;border-radius:4px;background:#667eea;color:#fff;cursor:pointer;">下一页</button>' +
             '</div>';
-        }
+          
+          let thirdRowHtml = '<div style="display:flex;justify-content:center;align-items:center;margin-top:2px;">' +
+            '<span>共 ' + filtered.length + ' 首 (' + totalPages + ' 页)</span>' +
+            '</div>';
 
-        footerHtml = '<div style="display:flex;flex-direction:column;gap:6px;margin-top:10px;padding-top:8px;border-top:1px solid #eee;font-size:12px;color:#666;">' +
-          (firstRowHtml ? firstRowHtml : '') +
-          secondRowHtml +
-          '</div>';
+          footerHtml = '<div style="display:flex;flex-direction:column;gap:6px;margin-top:10px;padding-top:8px;border-top:1px solid #eee;font-size:12px;color:#666;">' +
+            secondRowHtml +
+            thirdRowHtml +
+            '</div>';
       }
 
       playlist.innerHTML = headerHtml + itemsHtml + footerHtml;
