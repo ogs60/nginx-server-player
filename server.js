@@ -1744,7 +1744,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
         alert('当前没有可清除歌词的歌曲');
         return;
       }
-      if (!confirm('确定清除「' + currentItem.name + '」的已缓存歌词吗？\n清除后您可以点击「🔍 搜词」手动重新搜索。')) return;
+      if (!confirm('确定清除「' + currentItem.name + '」的已缓存歌词吗？\\n清除后您可以点击「🔍 搜词」手动重新搜索。')) return;
 
       var key = getSongKey();
       if (key) {
