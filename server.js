@@ -1676,13 +1676,23 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       if (offsetRow) offsetRow.style.display = 'none';
       if (scroll) scroll.innerHTML = '<div class="lyrics-tip">搜索歌词中: ' + escapeHtml(title) + ' ...</div>';
       if (meta) meta.textContent = '';
-      fetch('/lyrics?title=' + encodeURIComponent(title))
+      var currentItem = (currentIndex >= 0 && playlistItems[currentIndex]) ? playlistItems[currentIndex] : null;
+      var itemKey = (currentItem && currentItem.key) || '';
+      var itemUrl = (currentItem && currentItem.url) || '';
+
+      var query = 'title=' + encodeURIComponent(title);
+      if (itemKey) query += '&key=' + encodeURIComponent(itemKey);
+      if (itemUrl) query += '&url=' + encodeURIComponent(itemUrl);
+      if (force) query += '&force=1';
+
+      fetch('/lyrics?' + query)
         .then(function(r) { return r.json(); })
         .then(function(data) {
           if (data.lyrics && data.synced) {
             lyricLines = parseLrc(data.lyrics);
             renderLyricLines(lyricLines);
-            if (meta) meta.textContent = (data.artistName ? data.artistName + ' · ' : '') + (data.trackName || '');
+            var tag = (data.source === 'youtube-subtitles' || data.source === 'local-cache') ? ' [YouTube字幕]' : '';
+            if (meta) meta.textContent = (data.artistName ? data.artistName + ' · ' : '') + (data.trackName || '') + tag;
             if (btnOffset) btnOffset.style.display = 'inline-flex';
             if (currentPlayer) updateLyricSync(currentPlayer.currentTime);
           } else if (data.lyrics) {
@@ -2626,9 +2636,12 @@ function handleCacheDelete(req, res) {
       const data = JSON.parse(body);
       const file = path.basename(data.file || '');
       if (!/^[a-f0-9]{64}\.(mp3|wav|m4a|aac|ogg|flac|mp4|webm|mov)$/.test(file)) throw new Error('invalid cache file');
+      const key = file.replace(/\.[^.]+$/, '');
       const target = path.join(CACHE_DIR, file);
       if (fs.existsSync(target)) fs.unlinkSync(target);
-      deleteCacheMetadataEntry(file.replace(/\.[^.]+$/, '')).then(() => {
+      const lrcTarget = path.join(CACHE_DIR, key + '.lrc');
+      if (fs.existsSync(lrcTarget)) try { fs.unlinkSync(lrcTarget); } catch (e) {}
+      deleteCacheMetadataEntry(key).then(() => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true }));
       });
@@ -2727,6 +2740,10 @@ function handleCacheBatchDelete(req, res) {
             }
             const key = file.replace(/\.[^.]+$/, '');
             delete metadata[key];
+            const lrcTarget = path.join(CACHE_DIR, key + '.lrc');
+            if (fs.existsSync(lrcTarget)) {
+              try { fs.unlinkSync(lrcTarget); } catch (e) {}
+            }
           }
         });
         const normalized = normalizeMetadataOrder(metadata);
@@ -2978,6 +2995,9 @@ function startDownload(inputUrl, key, cachePath, format) {
             writeCacheMetadataEntry(key, { url: inputUrl }).then(() => {
               DOWNLOAD_PROGRESS.set(key, { status: 'complete', percent: 100 });
               console.log(`[cache] ${format.toUpperCase()} download completed (key=${key.slice(0, 12)}, size=${fs.statSync(cachePath).size} bytes)`);
+              fetchYouTubeSubtitles(inputUrl, key).catch(err => {
+                console.warn(`[lyrics] Subtitle auto-fetch notice for ${key.slice(0, 10)}:`, err.message);
+              });
               resolve(cachePath);
             }).catch(reject);
           });
@@ -3218,8 +3238,229 @@ async function searchLrclibLyrics(cleanTitle) {
   return null;
 }
 
+// ==================== YouTube 字幕提取与本地歌词持久化 ====================
+
+function convertVttOrSrtToLrc(content) {
+  if (!content) return '';
+  const normalized = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const blocks = normalized.split(/\n\s*\n/);
+  const lrcList = [];
+  const timeRegex = /(?:(\d{1,2}):)?(\d{2}):(\d{2})[.,](\d{2,3})\s*-->\s*(?:(?:\d{1,2}):)?(?:\d{2}):(?:\d{2})[.,](?:\d{2,3})/;
+
+  let lastCombinedText = '';
+
+  for (const block of blocks) {
+    const lines = block.trim().split('\n');
+    if (!lines.length) continue;
+
+    let timeMatch = null;
+    let textLines = [];
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      if (trimmed.startsWith('WEBVTT') || trimmed.startsWith('Kind:') || trimmed.startsWith('Language:') || trimmed.startsWith('NOTE') || /^\d+$/.test(trimmed)) {
+        continue;
+      }
+      const m = trimmed.match(timeRegex);
+      if (m) {
+        timeMatch = m;
+      } else if (timeMatch) {
+        const clean = trimmed
+          .replace(/<[^>]+>/g, '')
+          .replace(/&nbsp;/g, ' ')
+          .replace(/&amp;/g, '&')
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .replace(/&quot;/g, '"')
+          .replace(/\s+/g, ' ')
+          .trim();
+        if (clean) textLines.push(clean);
+      }
+    }
+
+    if (timeMatch && textLines.length > 0) {
+      const h = parseInt(timeMatch[1] || '0', 10);
+      const m = parseInt(timeMatch[2], 10) + h * 60;
+      const s = parseInt(timeMatch[3], 10);
+      const ms = timeMatch[4].padEnd(3, '0').slice(0, 2);
+      const mmStr = String(m).padStart(2, '0');
+      const ssStr = String(s).padStart(2, '0');
+      const timestamp = `[${mmStr}:${ssStr}.${ms}]`;
+
+      const combinedText = textLines.join(' ');
+      if (combinedText !== lastCombinedText) {
+        lrcList.push(`${timestamp}${combinedText}`);
+        lastCombinedText = combinedText;
+      }
+    }
+  }
+
+  return lrcList.join('\n');
+}
+
+function getLocalLrcContent(key) {
+  if (!key) return null;
+  const direct = path.join(CACHE_DIR, `${key}.lrc`);
+  if (fs.existsSync(direct)) {
+    try {
+      const c = fs.readFileSync(direct, 'utf8').trim();
+      if (c) return c;
+    } catch (e) {}
+  }
+  if (key.length >= 8 && key.length < 64) {
+    try {
+      const files = fs.readdirSync(CACHE_DIR);
+      const matched = files.find(f => f.startsWith(key) && f.endsWith('.lrc'));
+      if (matched) {
+        const c = fs.readFileSync(path.join(CACHE_DIR, matched), 'utf8').trim();
+        if (c) return c;
+      }
+    } catch (e) {}
+  }
+  return null;
+}
+
+function getYouTubeUrlByKey(key) {
+  if (!key) return null;
+  const metadata = readCacheMetadata();
+  if (metadata[key] && metadata[key].url && validateYouTubeUrl(metadata[key].url)) {
+    return metadata[key].url;
+  }
+  const fullKey = Object.keys(metadata).find(k => k.startsWith(key));
+  if (fullKey && metadata[fullKey] && metadata[fullKey].url && validateYouTubeUrl(metadata[fullKey].url)) {
+    return metadata[fullKey].url;
+  }
+  return null;
+}
+
+async function fetchYouTubeSubtitles(inputUrl, key) {
+  if (!validateYouTubeUrl(inputUrl)) return null;
+
+  const tempPrefix = path.join(CACHE_DIR, `ytsub_${key}_${Date.now()}`);
+  const ytArgs = [
+    '--socket-timeout', '30',
+    '--no-warnings',
+    '--no-playlist',
+    '--skip-download',
+    '--write-subs',
+    '--write-auto-subs',
+    '--sub-langs', 'zh-Hans,zh-CN,zh,zh-Hant,zh-TW,zh-HK,en,all',
+    '--sub-format', 'vtt/srt/best',
+    '-o', `${tempPrefix}.%(ext)s`
+  ];
+
+  const cookiesPath = getYouTubeCookiesPath();
+  if (cookiesPath) ytArgs.unshift('--cookies', cookiesPath);
+  if (YOUTUBE_PROXY) ytArgs.unshift('--proxy', YOUTUBE_PROXY);
+  ytArgs.push(inputUrl);
+
+  try {
+    await execFileAsync('yt-dlp', ytArgs, { timeout: 35000 });
+  } catch (err) {
+    console.log(`[lyrics] yt-dlp subtitle notice for ${key.slice(0, 10)}:`, err.message ? err.message.slice(0, 200) : '');
+  }
+
+  let subFiles = [];
+  try {
+    const dirFiles = fs.readdirSync(CACHE_DIR);
+    const prefixName = path.basename(tempPrefix);
+    subFiles = dirFiles.filter(f => f.startsWith(prefixName) && /\.(vtt|srt)$/i.test(f));
+  } catch (e) {
+    return null;
+  }
+
+  if (!subFiles.length) return null;
+
+  const langPriority = ['zh-Hans', 'zh-CN', 'zh', 'zh-Hant', 'zh-TW', 'zh-HK', 'en'];
+  subFiles.sort((a, b) => {
+    const getScore = (name) => {
+      for (let i = 0; i < langPriority.length; i++) {
+        if (name.includes(langPriority[i])) return i;
+      }
+      return 999;
+    };
+    return getScore(a) - getScore(b);
+  });
+
+  const bestFile = path.join(CACHE_DIR, subFiles[0]);
+  let lrcText = null;
+  try {
+    const content = fs.readFileSync(bestFile, 'utf8');
+    lrcText = convertVttOrSrtToLrc(content);
+  } catch (e) {
+    console.warn('[lyrics] Failed to read subtitle file:', e.message);
+  }
+
+  for (const f of subFiles) {
+    try { fs.unlinkSync(path.join(CACHE_DIR, f)); } catch {}
+  }
+
+  if (lrcText && lrcText.trim()) {
+    const targetLrc = path.join(CACHE_DIR, `${key}.lrc`);
+    try {
+      fs.writeFileSync(targetLrc, lrcText, 'utf8');
+      const mp3Key = getYouTubeCacheKey(inputUrl, 'mp3');
+      const mp4Key = getYouTubeCacheKey(inputUrl, 'mp4');
+      if (mp3Key && mp3Key !== key) {
+        try { fs.writeFileSync(path.join(CACHE_DIR, `${mp3Key}.lrc`), lrcText, 'utf8'); } catch {}
+      }
+      if (mp4Key && mp4Key !== key) {
+        try { fs.writeFileSync(path.join(CACHE_DIR, `${mp4Key}.lrc`), lrcText, 'utf8'); } catch {}
+      }
+      console.log(`[lyrics] Saved YouTube subtitle for ${key.slice(0, 10)} (${lrcText.split('\n').length} lines)`);
+    } catch (e) {
+      console.warn('[lyrics] Failed to write .lrc file:', e.message);
+    }
+    return lrcText;
+  }
+
+  return null;
+}
+
 async function handleLyrics(url, res) {
   const rawTitle = (url.searchParams.get('title') || '').trim().substring(0, 200);
+  const key = (url.searchParams.get('key') || '').trim();
+  const songUrl = (url.searchParams.get('url') || '').trim();
+  const force = url.searchParams.get('force') === '1';
+
+  // 1. 若非手动重新搜索，优先直接读取本地已有缓存歌词/字幕 (cache/<key>.lrc)
+  if (!force && key) {
+    const localLrc = getLocalLrcContent(key);
+    if (localLrc) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        lyrics: localLrc,
+        synced: true,
+        trackName: rawTitle,
+        source: 'local-cache'
+      }));
+      return;
+    }
+  }
+
+  // 2. 若是 YouTube 视频，优先提取并解析 YouTube 原生字幕
+  const targetYtUrl = (songUrl && validateYouTubeUrl(songUrl)) ? songUrl : getYouTubeUrlByKey(key);
+  if (targetYtUrl) {
+    const ytKey = key || getYouTubeCacheKey(targetYtUrl, 'mp3');
+    try {
+      const ytLrc = await fetchYouTubeSubtitles(targetYtUrl, ytKey);
+      if (ytLrc) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          lyrics: ytLrc,
+          synced: true,
+          trackName: rawTitle,
+          source: 'youtube-subtitles'
+        }));
+        return;
+      }
+    } catch (e) {
+      console.warn('[lyrics] fetchYouTubeSubtitles notice:', e.message);
+    }
+  }
+
+  // 3. 兜底策略：全网检索（酷狗 -> 网易云 -> lrclib）
   if (!rawTitle) {
     res.writeHead(400, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'title required' }));
@@ -3240,7 +3481,12 @@ async function handleLyrics(url, res) {
     result = await searchLrclibLyrics(cleanTitle);
   }
 
-  if (result) {
+  if (result && result.lyrics) {
+    if (key && /^[a-f0-9]{64}$/.test(key)) {
+      try {
+        fs.writeFileSync(path.join(CACHE_DIR, `${key}.lrc`), result.lyrics, 'utf8');
+      } catch (e) {}
+    }
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(result));
   } else {
@@ -3495,7 +3741,7 @@ function renderShareErrorHTML(title, message) {
 function renderSharePlayerHTML(song, shortKey, t, s) {
   const safeTitle = escapeHtmlServer(song.title);
   const mediaUrl = `/s/media/${encodeURIComponent(shortKey)}?t=${encodeURIComponent(t)}&s=${encodeURIComponent(s)}`;
-  const lyricsUrl = `/s/lyrics?title=${encodeURIComponent(song.title)}`;
+  const lyricsUrl = `/s/lyrics?title=${encodeURIComponent(song.title)}&key=${encodeURIComponent(song.fullKey)}&url=${encodeURIComponent(song.url || '')}`;
   const expNum = Number(t) || 0;
 
   return `<!DOCTYPE html>
