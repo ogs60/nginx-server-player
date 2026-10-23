@@ -1713,7 +1713,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
             var sourceNames = {
               'youtube-subtitles': 'YouTube字幕',
               'local-cache': '本地歌词',
-              'kugou': '酷狗音乐',
+              'kugou': '酷狗/QQ音乐',
               'netease': '网易云音乐',
               'lrclib': 'LRCLIB'
             };
@@ -3390,26 +3390,57 @@ function convertVttOrSrtToLrc(content) {
   return lrcList.join('\n');
 }
 
-function getLocalLrcContent(key) {
+function getLocalLrcInfo(key, preferredSource = null) {
   if (!key) return null;
-  const direct = path.join(CACHE_DIR, `${key}.lrc`);
-  if (fs.existsSync(direct)) {
-    try {
-      const c = fs.readFileSync(direct, 'utf8').trim();
-      if (c) return c;
-    } catch (e) {}
+  let fullKey = key;
+  if (key.length < 64) {
+    const metadata = readCacheMetadata();
+    const matched = Object.keys(metadata).find(k => k.startsWith(key));
+    if (matched) fullKey = matched;
   }
-  if (key.length >= 8 && key.length < 64) {
+
+  // 1. 如果指定了首选来源（例如 'ytb'）
+  if (preferredSource) {
+    const p = path.join(CACHE_DIR, `${fullKey}.${preferredSource}.lrc`);
+    if (fs.existsSync(p)) {
+      try {
+        const c = fs.readFileSync(p, 'utf8').trim();
+        if (c) return { lyrics: c, source: preferredSource === 'ytb' ? 'youtube-subtitles' : preferredSource };
+      } catch {}
+    }
+    return null;
+  }
+
+  // 2. 严格按优先级检查本地文件: ytb (YouTube原生字幕最高) -> kugou -> netease -> lrclib
+  const candidateSources = ['ytb', 'kugou', 'netease', 'lrclib'];
+  for (const src of candidateSources) {
+    const p = path.join(CACHE_DIR, `${fullKey}.${src}.lrc`);
+    if (fs.existsSync(p)) {
+      try {
+        const c = fs.readFileSync(p, 'utf8').trim();
+        if (c) return { lyrics: c, source: src === 'ytb' ? 'youtube-subtitles' : src };
+      } catch {}
+    }
+  }
+
+  // 3. 兼容检查旧版单个 .lrc 文件
+  const legacyPath = path.join(CACHE_DIR, `${fullKey}.lrc`);
+  if (fs.existsSync(legacyPath)) {
     try {
-      const files = fs.readdirSync(CACHE_DIR);
-      const matched = files.find(f => f.startsWith(key) && f.endsWith('.lrc'));
-      if (matched) {
-        const c = fs.readFileSync(path.join(CACHE_DIR, matched), 'utf8').trim();
-        if (c) return c;
+      const c = fs.readFileSync(legacyPath, 'utf8').trim();
+      if (c) {
+        const src = c.includes('[source:youtube-subtitles]') ? 'youtube-subtitles' : 'local-cache';
+        return { lyrics: c, source: src };
       }
-    } catch (e) {}
+    } catch {}
   }
+
   return null;
+}
+
+function getLocalLrcContent(key) {
+  const info = getLocalLrcInfo(key);
+  return info ? info.lyrics : null;
 }
 
 function getYouTubeUrlByKey(key) {
@@ -3438,7 +3469,7 @@ function hasNoSubMarker(key) {
   return false;
 }
 
-function saveLocalLrcContent(key, lyrics, inputUrl) {
+function saveLocalLrcContent(key, lyrics, source = 'ytb', inputUrl = null) {
   if (!key || !lyrics) return;
   let fullKey = key;
   if (key.length < 64) {
@@ -3446,11 +3477,24 @@ function saveLocalLrcContent(key, lyrics, inputUrl) {
     const matched = Object.keys(metadata).find(k => k.startsWith(key));
     if (matched) fullKey = matched;
   }
-  const targetLrc = path.join(CACHE_DIR, `${fullKey}.lrc`);
+
+  // 区分不同平台后缀：.ytb.lrc, .kugou.lrc, .netease.lrc, .lrclib.lrc
+  let extSuffix = 'ytb';
+  if (source === 'youtube-subtitles' || source === 'ytb') extSuffix = 'ytb';
+  else if (source === 'kugou') extSuffix = 'kugou';
+  else if (source === 'netease') extSuffix = 'netease';
+  else if (source === 'lrclib') extSuffix = 'lrclib';
+  else extSuffix = String(source || 'lrc').replace(/[^a-z0-9_-]/gi, '');
+
+  const targetLrc = path.join(CACHE_DIR, `${fullKey}.${extSuffix}.lrc`);
   try {
     fs.writeFileSync(targetLrc, lyrics, 'utf8');
+    // 如果是 YouTube 原生字幕，同时写一份到 <key>.lrc 作为基准，防止被国内平台覆盖
+    if (extSuffix === 'ytb') {
+      try { fs.writeFileSync(path.join(CACHE_DIR, `${fullKey}.lrc`), lyrics, 'utf8'); } catch {}
+    }
   } catch (e) {
-    console.warn('[lyrics] Failed to write .lrc file:', e.message);
+    console.warn(`[lyrics] Failed to write .${extSuffix}.lrc file:`, e.message);
   }
 
   const noSubFile = path.join(CACHE_DIR, `${fullKey}.nosub`);
@@ -3464,7 +3508,12 @@ function saveLocalLrcContent(key, lyrics, inputUrl) {
     const mp4Key = getYouTubeCacheKey(ytUrl, 'mp4');
     [mp3Key, mp4Key].forEach(k => {
       if (k && k !== fullKey) {
-        try { fs.writeFileSync(path.join(CACHE_DIR, `${k}.lrc`), lyrics, 'utf8'); } catch {}
+        try {
+          fs.writeFileSync(path.join(CACHE_DIR, `${k}.${extSuffix}.lrc`), lyrics, 'utf8');
+          if (extSuffix === 'ytb') {
+            fs.writeFileSync(path.join(CACHE_DIR, `${k}.lrc`), lyrics, 'utf8');
+          }
+        } catch {}
         const nosub = path.join(CACHE_DIR, `${k}.nosub`);
         if (fs.existsSync(nosub)) try { fs.unlinkSync(nosub); } catch {}
       }
@@ -3537,8 +3586,8 @@ async function fetchYouTubeSubtitles(inputUrl, key) {
 
   if (lrcText && lrcText.trim()) {
     const formattedLrc = `[source:youtube-subtitles]\n${lrcText.trim()}`;
-    saveLocalLrcContent(key, formattedLrc, inputUrl);
-    console.log(`[lyrics] Saved YouTube subtitle for ${key.slice(0, 10)} (${lrcText.split('\n').length} lines)`);
+    saveLocalLrcContent(key, formattedLrc, 'ytb', inputUrl);
+    console.log(`[lyrics] Saved YouTube subtitle (${key.slice(0, 10)}.ytb.lrc, ${lrcText.split('\n').length} lines)`);
     return formattedLrc;
   }
 
@@ -3554,23 +3603,23 @@ async function handleLyrics(url, res) {
 
   const targetYtUrl = (songUrl && validateYouTubeUrl(songUrl)) ? songUrl : getYouTubeUrlByKey(key);
 
-  // 1. 若非手动重新搜索，优先检查本地已有缓存歌词/字幕 (cache/<key>.lrc)
+  // 1. 如果非手动搜词，首先寻找本地已有的 ytb 字幕 (<key>.ytb.lrc)
   if (!force && !manual && key) {
-    const localLrc = getLocalLrcContent(key);
-    // 如果本地已有确定是 YouTube 原生字幕，或者该歌曲不是 YouTube 视频、或者已被用户标记清词，直接返回本地缓存
-    if (localLrc && (localLrc.includes('[source:youtube-subtitles]') || !targetYtUrl || hasNoSubMarker(key))) {
+    const localYtb = getLocalLrcInfo(key, 'ytb');
+    if (localYtb) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
-        lyrics: localLrc,
+        lyrics: localYtb.lyrics,
         synced: true,
         trackName: rawTitle,
-        source: localLrc.includes('[source:youtube-subtitles]') ? 'youtube-subtitles' : 'local-cache'
+        source: 'youtube-subtitles'
       }));
       return;
     }
   }
 
-  // 2. 若是 YouTube 视频，且未被用户清词禁用、且非用户手动搜词模式，字幕优先级最高
+  // 2. 如果本地没有 ytb 字幕，且该歌曲来自 YouTube 且未被用户清词禁用、非手动搜词模式：
+  //    先去 ytb 下载字幕，下载成功保存为 <key>.ytb.lrc
   if (!manual && targetYtUrl && !hasNoSubMarker(key)) {
     const ytKey = key || getYouTubeCacheKey(targetYtUrl, 'mp3');
     try {
@@ -3590,23 +3639,23 @@ async function handleLyrics(url, res) {
     }
   }
 
-  // 3. 若 YouTube 没有字幕，但本地已有旧缓存（如之前的国内平台歌词），回退使用本地缓存
+  // 3. 如果 ytb 下载字幕失败，或非 YouTube 歌曲：
+  //    检查本地是否已有国内平台之前下载的歌词缓存 (<key>.kugou.lrc, <key>.netease.lrc, <key>.lrclib.lrc)
   if (!force && !manual && key) {
-    const localLrc = getLocalLrcContent(key);
-    if (localLrc) {
+    const localOther = getLocalLrcInfo(key);
+    if (localOther && localOther.source !== 'youtube-subtitles') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
-        lyrics: localLrc,
+        lyrics: localOther.lyrics,
         synced: true,
         trackName: rawTitle,
-        source: 'local-cache'
+        source: localOther.source
       }));
       return;
     }
   }
 
-  // 3. 国内平台歌词检索（酷狗 -> 网易云 -> lrclib）
-  //    用于：无字幕时的自动兜底；或用户点击「🔍 搜词」时直接在国内平台重新找
+  // 4. 本地均无可用歌词，或用户手动搜词：去国内平台（酷狗/QQ -> 网易云 -> lrclib）检索
   if (!rawTitle) {
     res.writeHead(400, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'title required' }));
@@ -3621,7 +3670,7 @@ async function handleLyrics(url, res) {
     return;
   }
 
-  // 1. 优先使用酷狗音乐（国内曲库全、云服务器绝不封禁、免鉴权）
+  // 1. 优先：酷狗音乐 / QQ音乐曲库
   let result = await searchKugouLyrics(cleanTitle, rawTitle);
 
   // 2. 备用：网易云音乐
@@ -3636,7 +3685,8 @@ async function handleLyrics(url, res) {
 
   if (result && result.lyrics) {
     if (key && /^[a-f0-9]{8,64}$/i.test(key)) {
-      saveLocalLrcContent(key, result.lyrics, targetYtUrl);
+      // 标注来自哪个平台保存，例如 <key>.kugou.lrc 或 <key>.netease.lrc
+      saveLocalLrcContent(key, result.lyrics, result.source || 'kugou', targetYtUrl);
     }
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(result));
@@ -3665,12 +3715,7 @@ function handleLyricsDelete(req, res) {
         if (matched) fullKey = matched;
       }
 
-      const targetLrc = path.join(CACHE_DIR, `${fullKey}.lrc`);
-      if (fs.existsSync(targetLrc)) {
-        try { fs.unlinkSync(targetLrc); deletedCount++; } catch {}
-      }
-
-      // 清除前缀匹配的 .lrc 及临时字幕文件
+      // 清除该 key 下所有格式的歌词文件: .ytb.lrc, .kugou.lrc, .netease.lrc, .lrclib.lrc, .lrc
       try {
         const files = fs.readdirSync(CACHE_DIR);
         files.forEach(f => {
@@ -3690,10 +3735,14 @@ function handleLyricsDelete(req, res) {
         const mp4Key = getYouTubeCacheKey(ytUrl, 'mp4');
         [mp3Key, mp4Key].forEach(k => {
           if (k) {
-            const p = path.join(CACHE_DIR, `${k}.lrc`);
-            if (fs.existsSync(p)) {
-              try { fs.unlinkSync(p); deletedCount++; } catch {}
-            }
+            try {
+              const files = fs.readdirSync(CACHE_DIR);
+              files.forEach(f => {
+                if (f.startsWith(k) && f.endsWith('.lrc')) {
+                  try { fs.unlinkSync(path.join(CACHE_DIR, f)); deletedCount++; } catch {}
+                }
+              });
+            } catch {}
             try { fs.writeFileSync(path.join(CACHE_DIR, `${k}.nosub`), '', 'utf8'); } catch {}
           }
         });
