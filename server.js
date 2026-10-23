@@ -323,9 +323,13 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       color: #333;
     }
     .share-btn {
-      margin-left: 8px;
-      padding: 2px 8px;
+      margin-left: 6px;
+      padding: 0;
+      width: 18px;
+      height: 18px;
       font-size: 11px;
+      line-height: 18px;
+      text-align: center;
       color: #667eea;
       background: #f0f4ff;
       border: 1px solid #d0dbff;
@@ -333,16 +337,21 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       cursor: pointer;
       flex-shrink: 0;
       white-space: nowrap;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       transition: all 0.2s ease;
+      opacity: 0.8;
     }
     .share-btn:hover {
       background: #667eea;
       color: #fff;
       border-color: #667eea;
-      transform: translateY(-1px);
+      opacity: 1;
+      transform: scale(1.1);
     }
     .share-btn:active {
-      transform: translateY(0);
+      transform: scale(0.95);
     }
     .player-section {
       background: #f5f5f5;
@@ -953,7 +962,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       const itemsHtml = pageEntries.length ? pageEntries.map(entry => {
         const item = entry.item;
         const index = entry.index;
-        const shareBtn = item.key ? '<button type="button" class="share-btn" onclick="shareSong(' + index + ', event)" title="生成24小时免登分享链接">🔗 分享</button>' : '';
+        const shareBtn = item.key ? '<button type="button" class="share-btn" onclick="shareSong(' + index + ', event)" title="生成24小时免登分享链接">🔗</button>' : '';
         return '<div style="display:flex;align-items:center;padding:5px 0;' + (index === currentIndex ? 'font-weight:bold;color:#667eea;' : '') + '">' +
           '<span style="flex:1;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" onclick="playItem(' + index + ')" title="点击播放">' + (index + 1) + '. ' + escapeHtml(item.name) + ' <small style="color:#888">[' + (item.cached ? '本地缓存' : item.local ? '本地文件' : 'URL') + ']</small></span>' +
           shareBtn +
@@ -1037,7 +1046,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       var btn = event ? event.currentTarget : null;
       var origText = btn ? btn.textContent : '';
       if (btn) {
-        btn.textContent = '⏳ 生成中';
+        btn.textContent = '⏳';
         btn.disabled = true;
       }
       fetch('/share-link?key=' + encodeURIComponent(item.key))
