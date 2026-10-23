@@ -323,35 +323,33 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       color: #333;
     }
     .share-btn {
-      margin-left: 6px;
-      padding: 0;
-      width: 18px;
-      height: 18px;
-      font-size: 11px;
-      line-height: 18px;
-      text-align: center;
-      color: #667eea;
-      background: #f0f4ff;
-      border: 1px solid #d0dbff;
-      border-radius: 4px;
-      cursor: pointer;
-      flex-shrink: 0;
-      white-space: nowrap;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      transition: all 0.2s ease;
-      opacity: 0.8;
+      flex: 0 0 auto !important;
+      width: auto !important;
+      margin-left: 8px !important;
+      padding: 2px 7px !important;
+      font-size: 11px !important;
+      line-height: 16px !important;
+      height: 22px !important;
+      color: #667eea !important;
+      background: #f0f4ff !important;
+      border: 1px solid #c7d2fe !important;
+      border-radius: 4px !important;
+      cursor: pointer !important;
+      white-space: nowrap !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      gap: 3px !important;
+      transition: all 0.2s ease !important;
     }
     .share-btn:hover {
-      background: #667eea;
-      color: #fff;
-      border-color: #667eea;
-      opacity: 1;
-      transform: scale(1.1);
+      background: #667eea !important;
+      color: #fff !important;
+      border-color: #667eea !important;
+      transform: translateY(-1px);
     }
     .share-btn:active {
-      transform: scale(0.95);
+      transform: translateY(0);
     }
     .player-section {
       background: #f5f5f5;
@@ -962,9 +960,9 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       const itemsHtml = pageEntries.length ? pageEntries.map(entry => {
         const item = entry.item;
         const index = entry.index;
-        const shareBtn = item.key ? '<button type="button" class="share-btn" onclick="shareSong(' + index + ', event)" title="生成24小时免登分享链接">🔗</button>' : '';
+        const shareBtn = item.key ? '<button type="button" class="share-btn" onclick="shareSong(' + index + ', event)" title="生成24小时免登分享链接">🔗 分享</button>' : '';
         return '<div style="display:flex;align-items:center;padding:5px 0;' + (index === currentIndex ? 'font-weight:bold;color:#667eea;' : '') + '">' +
-          '<span style="flex:1;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" onclick="playItem(' + index + ')" title="点击播放">' + (index + 1) + '. ' + escapeHtml(item.name) + ' <small style="color:#888">[' + (item.cached ? '本地缓存' : item.local ? '本地文件' : 'URL') + ']</small></span>' +
+          '<span style="flex:1;min-width:0;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" onclick="playItem(' + index + ')" title="点击播放">' + (index + 1) + '. ' + escapeHtml(item.name) + ' <small style="color:#888">[' + (item.cached ? '本地缓存' : item.local ? '本地文件' : 'URL') + ']</small></span>' +
           shareBtn +
           '</div>';
       }).join('') : '<div style="text-align:center;color:#888;padding:12px;font-size:12px;">未在播放列表中找到匹配歌曲</div>';
