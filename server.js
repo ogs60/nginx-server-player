@@ -1124,7 +1124,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       switchPlayer(item.type);
       currentPlayer.src = item.src;
       currentPlayer.loop = false;
-      nowPlaying.textContent = '正在播放: ' + item.name;
+      nowPlaying.textContent = '正在播放: ' + item.name + ' [' + (currentIndex + 1) + '/' + playlistItems.length + ']';
       currentPlayer.play().catch(e => console.warn('自动播放被浏览器阻止:', e.message));
       if (item.name && item.name !== item.url) fetchLyrics(item.name);
       else clearLyrics();
@@ -1429,7 +1429,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       });
       renderPlaylist();
       if (currentMatch) {
-        nowPlaying.textContent = '正在播放: ' + title;
+        nowPlaying.textContent = '正在播放: ' + title + ' [' + (currentIndex + 1) + '/' + playlistItems.length + ']';
         fetchLyrics(title);
       }
     }
