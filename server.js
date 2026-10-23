@@ -47,7 +47,22 @@ const ONLINE_VISITOR_TIMEOUT = 2 * 60 * 1000;
 const ONLINE_VISITORS = new Map();
 fs.mkdirSync(CACHE_DIR, { recursive: true });
 const startTime = Date.now();
+const startDateStr = new Date(startTime).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
 let visitorCount = 0;
+let cachedManageHTML = null; // P4: 静态管理页 HTML 缓存
+
+// P1: metadata 内存缓存，避免每次请求都读磁盘
+let _metadataCache = null;
+let _metadataCacheTime = 0;
+const METADATA_CACHE_TTL = 5000; // 5秒 TTL，写入后立即失效
+
+// P2: 定时清理过期在线访客，避免每次请求遍历
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, lastSeen] of ONLINE_VISITORS) {
+    if (now - lastSeen >= ONLINE_VISITOR_TIMEOUT) ONLINE_VISITORS.delete(id);
+  }
+}, 30000);
 
 function getShanghaiDate(date = new Date()) {
   const parts = new Intl.DateTimeFormat('en', {
@@ -153,12 +168,9 @@ function getClientVisitor(req, res) {
 }
 
 function handleOnlineVisitors(req, res) {
+  // P2: 过期清理已由定时器负责，接口只需更新当前访客并返回数量
   const { deviceId, visitorId, secure } = getVisitorIdentity(req);
-  const now = Date.now();
-  for (const [id, lastSeen] of ONLINE_VISITORS) {
-    if (now - lastSeen >= ONLINE_VISITOR_TIMEOUT) ONLINE_VISITORS.delete(id);
-  }
-  ONLINE_VISITORS.set(visitorId, now);
+  ONLINE_VISITORS.set(visitorId, Date.now());
   setVisitorCookie(res, deviceId, secure);
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ count: ONLINE_VISITORS.size }));
@@ -175,14 +187,14 @@ const server = http.createServer((req, res) => {
       currentVisitorNumber = 1;
     }
     
-    const startDate = new Date(startTime).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-    const htmlContent = getHTMLContent(startTime, currentVisitorNumber, startDate);
+    const htmlContent = getHTMLContent(startTime, currentVisitorNumber, startDateStr);
     
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(htmlContent);
   } else if (requestUrl.pathname === '/mc') {
+    if (!cachedManageHTML) cachedManageHTML = getManageHTMLContent();
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(getManageHTMLContent());
+    res.end(cachedManageHTML);
   } else if (requestUrl.pathname === '/share-link') {
     handleShareLink(req, res, requestUrl);
   } else if (requestUrl.pathname === '/s' || requestUrl.pathname.startsWith('/s/')) {
@@ -886,15 +898,6 @@ function getHTMLContent(startTime, visitorCount, startDate) {
     }
     
     let playlistSearchKeyword = '';
-    function onPlaylistSearch(val) {
-      playlistSearchKeyword = (val || '').trim().toLowerCase();
-      renderPlaylist();
-      const input = document.getElementById('playlistSearchInput');
-      if (input) {
-        input.focus();
-        input.selectionStart = input.selectionEnd = input.value.length;
-      }
-    }
 
     let playlistPage = 1;
     const playlistPageSize = 80;
@@ -2511,11 +2514,20 @@ function getManageHTMLContent() {
 let metadataWriteQueue = Promise.resolve();
 
 function readCacheMetadata() {
+  // P1: 内存缓存，5秒 TTL，写入时立即清除缓存，避免每次请求都读磁盘
+  const now = Date.now();
+  if (_metadataCache && (now - _metadataCacheTime) < METADATA_CACHE_TTL) {
+    return _metadataCache;
+  }
   try {
     const value = JSON.parse(fs.readFileSync(CACHE_META, 'utf8'));
-    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    _metadataCache = (value && typeof value === 'object' && !Array.isArray(value)) ? value : {};
+    _metadataCacheTime = now;
+    return _metadataCache;
   } catch {
-    return {};
+    _metadataCache = {};
+    _metadataCacheTime = now;
+    return _metadataCache;
   }
 }
 
@@ -2539,6 +2551,7 @@ function writeCacheMetadataEntry(key, value) {
     const temp = CACHE_META + '.tmp';
     fs.writeFileSync(temp, JSON.stringify(normalized, null, 2) + '\n');
     fs.renameSync(temp, CACHE_META);
+    _metadataCache = null; // P1: 写入后立即清除内存缓存
   });
   return metadataWriteQueue;
 }
@@ -2551,8 +2564,21 @@ function deleteCacheMetadataEntry(key) {
     const temp = CACHE_META + '.tmp';
     fs.writeFileSync(temp, JSON.stringify(normalized, null, 2) + '\n');
     fs.renameSync(temp, CACHE_META);
+    _metadataCache = null; // P1: 写入后立即清除内存缓存
   });
   return metadataWriteQueue;
+}
+
+const FILE_SIZE_CACHE = new Map();
+function getCachedFileSize(filePath, file) {
+  if (FILE_SIZE_CACHE.has(file)) return FILE_SIZE_CACHE.get(file);
+  try {
+    const size = fs.statSync(filePath).size;
+    FILE_SIZE_CACHE.set(file, size);
+    return size;
+  } catch (e) {
+    return 0;
+  }
 }
 
 function handleCacheList(res) {
@@ -2566,6 +2592,7 @@ function handleCacheList(res) {
       const temp = CACHE_META + '.tmp';
       fs.writeFileSync(temp, JSON.stringify(normalized, null, 2) + '\n');
       fs.renameSync(temp, CACHE_META);
+      _metadataCache = null; // P1: 写入后清除内存缓存
     });
   }
   const items = files.map(file => {
@@ -2573,8 +2600,7 @@ function handleCacheList(res) {
     const item = normalized[file] || normalized[key] || {};
     const isVideo = /\.(mp4|webm|mov)$/i.test(file);
     const filePath = path.join(CACHE_DIR, file);
-    let size = 0;
-    try { size = fs.statSync(filePath).size; } catch (e) {}
+    const size = getCachedFileSize(filePath, file);
     return {
       key: key,
       file: file,
@@ -2594,7 +2620,9 @@ function handleCacheList(res) {
 
 function handleCacheMetadata(req, res) {
   let body = '';
-  req.on('data', chunk => body += chunk);
+  let bodySize = 0;
+  const MAX_BODY = 4096; // S4
+  req.on('data', chunk => { bodySize += chunk.length; if (bodySize > MAX_BODY) { req.destroy(); return; } body += chunk; });
   req.on('end', () => {
     try {
       const data = JSON.parse(body);
@@ -2623,8 +2651,21 @@ function handleCacheUpload(req, res) {
   }
   const boundary = Buffer.from('--' + (boundaryMatch[1] || boundaryMatch[2]));
   const chunks = [];
+  let totalUploaded = 0;
+  const MAX_UPLOAD_SIZE = 300 * 1024 * 1024; // 300MB
 
-  req.on('data', chunk => chunks.push(chunk));
+  req.on('data', chunk => {
+    totalUploaded += chunk.length;
+    if (totalUploaded > MAX_UPLOAD_SIZE) {
+      if (!res.headersSent) {
+        res.writeHead(413, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: '上传文件超过限制 (最大 300MB)' }));
+      }
+      req.destroy();
+      return;
+    }
+    chunks.push(chunk);
+  });
   req.on('error', err => {
     console.error('上传请求出错:', err);
     if (!res.headersSent) {
@@ -2705,7 +2746,13 @@ function handleCacheUpload(req, res) {
 }
 function handleCacheDelete(req, res) {
   let body = '';
-  req.on('data', chunk => body += chunk);
+  let bodySize = 0;
+  const MAX_BODY = 4096; // S4
+  req.on('data', chunk => {
+    bodySize += chunk.length;
+    if (bodySize > MAX_BODY) { req.destroy(); return; }
+    body += chunk;
+  });
   req.on('end', () => {
     try {
       const data = JSON.parse(body);
@@ -2714,10 +2761,15 @@ function handleCacheDelete(req, res) {
       const key = file.replace(/\.[^.]+$/, '');
       const target = path.join(CACHE_DIR, file);
       if (fs.existsSync(target)) fs.unlinkSync(target);
-      const lrcTarget = path.join(CACHE_DIR, key + '.lrc');
-      if (fs.existsSync(lrcTarget)) try { fs.unlinkSync(lrcTarget); } catch (e) {}
-      const nosubTarget = path.join(CACHE_DIR, key + '.nosub');
-      if (fs.existsSync(nosubTarget)) try { fs.unlinkSync(nosubTarget); } catch (e) {}
+      FILE_SIZE_CACHE.delete(file);
+      // S2: 清理所有格式的歌词文件（.lrc .ytb.lrc .kugou.lrc .netease.lrc .lrclib.lrc .nosub 等）
+      try {
+        fs.readdirSync(CACHE_DIR).forEach(cf => {
+          if (cf.startsWith(key) && (cf.endsWith('.lrc') || cf.endsWith('.nosub'))) {
+            try { fs.unlinkSync(path.join(CACHE_DIR, cf)); } catch (e) {}
+          }
+        });
+      } catch (e) {}
       deleteCacheMetadataEntry(key).then(() => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true }));
@@ -2731,7 +2783,9 @@ function handleCacheDelete(req, res) {
 
 function handleCacheUpdate(req, res) {
   let body = '';
-  req.on('data', chunk => body += chunk);
+  let bodySize = 0;
+  const MAX_BODY = 4096; // S4
+  req.on('data', chunk => { bodySize += chunk.length; if (bodySize > MAX_BODY) { req.destroy(); return; } body += chunk; });
   req.on('end', () => {
     try {
       const data = JSON.parse(body);
@@ -2753,6 +2807,7 @@ function handleCacheUpdate(req, res) {
         const temp = CACHE_META + '.tmp';
         fs.writeFileSync(temp, JSON.stringify(normalized, null, 2) + '\n');
         fs.renameSync(temp, CACHE_META);
+        _metadataCache = null; // P1
       }).then(() => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true }));
@@ -2769,7 +2824,13 @@ function handleCacheUpdate(req, res) {
 
 function handleCacheReorder(req, res) {
   let body = '';
-  req.on('data', chunk => body += chunk);
+  let bodySize = 0;
+  const MAX_BODY = 131072; // S4: 最大 128KB
+  req.on('data', chunk => {
+    bodySize += chunk.length;
+    if (bodySize > MAX_BODY) { req.destroy(); return; }
+    body += chunk;
+  });
   req.on('end', () => {
     try {
       const data = JSON.parse(body);
@@ -2784,6 +2845,7 @@ function handleCacheReorder(req, res) {
         const temp = CACHE_META + '.tmp';
         fs.writeFileSync(temp, JSON.stringify(normalized, null, 2) + '\n');
         fs.renameSync(temp, CACHE_META);
+        _metadataCache = null; // P1
       }).then(() => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true }));
@@ -2800,7 +2862,13 @@ function handleCacheReorder(req, res) {
 
 function handleCacheBatchDelete(req, res) {
   let body = '';
-  req.on('data', chunk => body += chunk);
+  let bodySize = 0;
+  const MAX_BODY = 131072; // S4: 最大 128KB
+  req.on('data', chunk => {
+    bodySize += chunk.length;
+    if (bodySize > MAX_BODY) { req.destroy(); return; }
+    body += chunk;
+  });
   req.on('end', () => {
     try {
       const data = JSON.parse(body);
@@ -2808,6 +2876,8 @@ function handleCacheBatchDelete(req, res) {
       if (!files.length) throw new Error('请选择要删除的文件');
       metadataWriteQueue = metadataWriteQueue.then(() => {
         const metadata = readCacheMetadata();
+        // S2: 批量删歌时扫描所有相关文件（音频、所有平台歌词、nosub）
+        const allCacheFiles = fs.readdirSync(CACHE_DIR);
         files.forEach(f => {
           const file = path.basename(String(f));
           if (/^[a-f0-9]{64}\.(mp3|wav|m4a|aac|ogg|flac|mp4|webm|mov)$/.test(file)) {
@@ -2815,22 +2885,22 @@ function handleCacheBatchDelete(req, res) {
             if (fs.existsSync(target)) {
               try { fs.unlinkSync(target); } catch (e) {}
             }
+            FILE_SIZE_CACHE.delete(file);
             const key = file.replace(/\.[^.]+$/, '');
             delete metadata[key];
-            const lrcTarget = path.join(CACHE_DIR, key + '.lrc');
-            if (fs.existsSync(lrcTarget)) {
-              try { fs.unlinkSync(lrcTarget); } catch (e) {}
-            }
-            const nosubTarget = path.join(CACHE_DIR, key + '.nosub');
-            if (fs.existsSync(nosubTarget)) {
-              try { fs.unlinkSync(nosubTarget); } catch (e) {}
-            }
+            // 清理所有格式的歌词文件和标记文件
+            allCacheFiles.forEach(cf => {
+              if (cf.startsWith(key) && (cf.endsWith('.lrc') || cf.endsWith('.nosub'))) {
+                try { fs.unlinkSync(path.join(CACHE_DIR, cf)); } catch (e) {}
+              }
+            });
           }
         });
         const normalized = normalizeMetadataOrder(metadata);
         const temp = CACHE_META + '.tmp';
         fs.writeFileSync(temp, JSON.stringify(normalized, null, 2) + '\n');
         fs.renameSync(temp, CACHE_META);
+        _metadataCache = null; // P1
       }).then(() => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true }));
@@ -2949,7 +3019,13 @@ function handleCacheProgress(url, res) {
 }
 async function handleGetAudioUrl(req, res) {
   let body = '';
-  req.on('data', chunk => body += chunk);
+  let bodySize = 0;
+  const MAX_BODY = 4096; // S4: 限制请求体最大 4KB
+  req.on('data', chunk => {
+    bodySize += chunk.length;
+    if (bodySize > MAX_BODY) { req.destroy(); return; }
+    body += chunk;
+  });
   req.on('end', async () => {
     try {
       const data = JSON.parse(body);
@@ -2975,11 +3051,11 @@ async function handleGetAudioUrl(req, res) {
         console.warn('Title lookup failed; metadata will be saved after a successful title lookup:', e.message);
       }
       const key = getYouTubeCacheKey(inputUrl, format);
-      if (finalTitle) {
-        writeCacheMetadataEntry(key, { url: inputUrl, title: finalTitle });
+      if (title) { // S1: 修复原来用了未定义的 finalTitle，改为 title
+        writeCacheMetadataEntry(key, { url: inputUrl, title });
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ success: true, title: finalTitle, key }));
+      res.end(JSON.stringify({ success: true, title, key }));
     } catch (e) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: false, error: e.message.substring(0, 200) }));
@@ -2990,12 +3066,16 @@ async function handleGetAudioUrl(req, res) {
 
 async function handleMediaProxy(url, req, res) {
   const target = url.searchParams.get('url');
-  if (!target || !/^https?:$/i.test(new URL(target).protocol)) {
+  // S3: URL 校验包裹 try/catch，防止非法 URL 抛异常
+  let targetUrl;
+  try {
+    targetUrl = new URL(target);
+    if (!target || !/^https?:$/.test(targetUrl.protocol)) throw new Error('invalid protocol');
+  } catch {
     res.writeHead(400);
     res.end('Invalid media URL');
     return;
   }
-  const targetUrl = new URL(target);
   const client = targetUrl.protocol === 'https:' ? https : http;
   const proxyReq = client.get(targetUrl, {
     headers: {
@@ -3688,7 +3768,13 @@ async function handleLyrics(url, res) {
 
 function handleLyricsDelete(req, res) {
   let body = '';
-  req.on('data', chunk => body += chunk);
+  let bodySize = 0;
+  const MAX_BODY = 4096; // S4: 限制请求体最大 4KB
+  req.on('data', chunk => {
+    bodySize += chunk.length;
+    if (bodySize > MAX_BODY) { req.destroy(); return; }
+    body += chunk;
+  });
   req.on('end', () => {
     try {
       const data = JSON.parse(body || '{}');
@@ -3705,18 +3791,19 @@ function handleLyricsDelete(req, res) {
         if (matched) fullKey = matched;
       }
 
+      // 一次 readdir，后续复用（Q2: 避免循环内重复读目录）
+      let allCacheFiles = [];
+      try { allCacheFiles = fs.readdirSync(CACHE_DIR); } catch {}
+
       // 清除该 key 下所有格式的歌词文件: .ytb.lrc, .kugou.lrc, .netease.lrc, .lrclib.lrc, .lrc
-      try {
-        const files = fs.readdirSync(CACHE_DIR);
-        files.forEach(f => {
-          if ((f.startsWith(key) && f.endsWith('.lrc')) || (f.startsWith(`ytsub_${key}`))) {
-            try {
-              fs.unlinkSync(path.join(CACHE_DIR, f));
-              deletedCount++;
-            } catch {}
-          }
-        });
-      } catch {}
+      allCacheFiles.forEach(f => {
+        if ((f.startsWith(key) && f.endsWith('.lrc')) || (f.startsWith(`ytsub_${key}`))) {
+          try {
+            fs.unlinkSync(path.join(CACHE_DIR, f));
+            deletedCount++;
+          } catch {}
+        }
+      });
 
       // 若为 YouTube 歌曲，同时清理对应的 mp3/mp4 格式歌词并打上 nosub 标记
       const ytUrl = getYouTubeUrlByKey(fullKey);
@@ -3725,14 +3812,12 @@ function handleLyricsDelete(req, res) {
         const mp4Key = getYouTubeCacheKey(ytUrl, 'mp4');
         [mp3Key, mp4Key].forEach(k => {
           if (k) {
-            try {
-              const files = fs.readdirSync(CACHE_DIR);
-              files.forEach(f => {
-                if (f.startsWith(k) && f.endsWith('.lrc')) {
-                  try { fs.unlinkSync(path.join(CACHE_DIR, f)); deletedCount++; } catch {}
-                }
-              });
-            } catch {}
+            // Q2: 复用已读取的文件列表，不再重复 readdirSync
+            allCacheFiles.forEach(f => {
+              if (f.startsWith(k) && f.endsWith('.lrc')) {
+                try { fs.unlinkSync(path.join(CACHE_DIR, f)); deletedCount++; } catch {}
+              }
+            });
             try { fs.writeFileSync(path.join(CACHE_DIR, `${k}.nosub`), '', 'utf8'); } catch {}
           }
         });
