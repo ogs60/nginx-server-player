@@ -217,6 +217,8 @@ const server = http.createServer((req, res) => {
     handleGetAudioUrl(req, res);
   } else if (requestUrl.pathname === '/lyrics') {
     handleLyrics(requestUrl, res);
+  } else if (requestUrl.pathname === '/lyrics-delete') {
+    handleLyricsDelete(req, res);
   } else if (requestUrl.pathname === '/manifest.json') {
     const manifest = {
       name: "熊宝宝的音乐播放器",
@@ -752,6 +754,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
               <button type="button" class="lyric-btn" id="btnLyricSearch" onclick="toggleLyricSearch()" title="手动搜索歌词">🔍 搜词</button>
               <button type="button" class="lyric-btn" id="btnOffsetToggle" onclick="toggleOffsetControls()" title="调整歌词时间偏差" style="display:none;">⏱ 校准</button>
               <button type="button" class="lyric-btn" id="btnLyricExpand" onclick="toggleLyricExpand()" title="展开/收起歌词高度">⤢ 展开</button>
+              <button type="button" class="lyric-btn" id="btnClearLyrics" onclick="clearCurrentLyrics()" title="清除当前歌曲已缓存的错误歌词" style="display:none;color:#e53e3e;border-color:#fed7d7;">🗑️ 清词</button>
             </div>
           </div>
           <div id="offsetControlsRow" style="display:none;align-items:center;justify-content:center;gap:6px;padding:6px 0;margin-bottom:8px;background:#f0f4f8;border-radius:6px;font-size:11px;">
@@ -1534,11 +1537,15 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       if (key) {
         try { localStorage.setItem('bear_manual_lyric_' + key, query); } catch (e) {}
       }
+      var currentItem = (currentIndex >= 0 && playlistItems[currentIndex]) ? playlistItems[currentIndex] : null;
+      if (currentItem && currentItem.key) {
+        try { localStorage.setItem('bear_manual_lyric_' + currentItem.key, query); } catch (e) {}
+      }
       var row = document.getElementById('lyricSearchRow');
       if (row) row.style.display = 'none';
       var btn = document.getElementById('btnLyricSearch');
       if (btn) btn.classList.remove('active');
-      fetchLyrics(query, true);
+      fetchLyrics(query, true, true);
     }
 
     function parseLrc(text) {
@@ -1646,6 +1653,8 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       if (meta) meta.textContent = '';
       var btnOffset = document.getElementById('btnOffsetToggle');
       if (btnOffset) { btnOffset.style.display = 'none'; btnOffset.classList.remove('active'); }
+      var btnClear = document.getElementById('btnClearLyrics');
+      if (btnClear) btnClear.style.display = 'none';
       var offsetRow = document.getElementById('offsetControlsRow');
       if (offsetRow) offsetRow.style.display = 'none';
       var searchRow = document.getElementById('lyricSearchRow');
@@ -1655,13 +1664,23 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       updateOffsetDisplay();
     }
 
-    function fetchLyrics(title, force) {
+    function fetchLyrics(title, force, manual) {
       if (!title) return;
       var key = getSongKey();
+      var currentItem = (currentIndex >= 0 && playlistItems[currentIndex]) ? playlistItems[currentIndex] : null;
+      var itemKey = (currentItem && currentItem.key) || '';
+      var itemUrl = (currentItem && currentItem.url) || '';
+
       if (!force && key) {
         var savedManual = '';
         try { savedManual = localStorage.getItem('bear_manual_lyric_' + key); } catch (e) {}
-        if (savedManual) title = savedManual;
+        if (!savedManual && itemKey) {
+          try { savedManual = localStorage.getItem('bear_manual_lyric_' + itemKey); } catch (e) {}
+        }
+        if (savedManual) {
+          title = savedManual;
+          manual = true;
+        }
       }
       if (!force && title === lastLyricsTitle) return;
       lastLyricsTitle = title;
@@ -1672,18 +1691,18 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       var meta = document.getElementById('lyricsMeta');
       var btnOffset = document.getElementById('btnOffsetToggle');
       if (btnOffset) btnOffset.style.display = 'none';
+      var btnClear = document.getElementById('btnClearLyrics');
+      if (btnClear) btnClear.style.display = 'none';
       var offsetRow = document.getElementById('offsetControlsRow');
       if (offsetRow) offsetRow.style.display = 'none';
       if (scroll) scroll.innerHTML = '<div class="lyrics-tip">搜索歌词中: ' + escapeHtml(title) + ' ...</div>';
       if (meta) meta.textContent = '';
-      var currentItem = (currentIndex >= 0 && playlistItems[currentIndex]) ? playlistItems[currentIndex] : null;
-      var itemKey = (currentItem && currentItem.key) || '';
-      var itemUrl = (currentItem && currentItem.url) || '';
 
       var query = 'title=' + encodeURIComponent(title);
       if (itemKey) query += '&key=' + encodeURIComponent(itemKey);
       if (itemUrl) query += '&url=' + encodeURIComponent(itemUrl);
       if (force) query += '&force=1';
+      if (manual) query += '&manual=1';
 
       fetch('/lyrics?' + query)
         .then(function(r) { return r.json(); })
@@ -1691,22 +1710,67 @@ function getHTMLContent(startTime, visitorCount, startDate) {
           if (data.lyrics && data.synced) {
             lyricLines = parseLrc(data.lyrics);
             renderLyricLines(lyricLines);
-            var tag = (data.source === 'youtube-subtitles' || data.source === 'local-cache') ? ' [YouTube字幕]' : '';
+            var sourceNames = {
+              'youtube-subtitles': 'YouTube字幕',
+              'local-cache': '本地歌词',
+              'kugou': '酷狗音乐',
+              'netease': '网易云音乐',
+              'lrclib': 'LRCLIB'
+            };
+            var tag = data.source ? ' [' + (sourceNames[data.source] || data.source) + ']' : '';
             if (meta) meta.textContent = (data.artistName ? data.artistName + ' · ' : '') + (data.trackName || '') + tag;
             if (btnOffset) btnOffset.style.display = 'inline-flex';
+            if (btnClear) btnClear.style.display = 'inline-flex';
             if (currentPlayer) updateLyricSync(currentPlayer.currentTime);
           } else if (data.lyrics) {
             if (scroll) scroll.innerHTML = '<div style="padding:10px;font-size:13px;color:#888;text-align:center;white-space:pre-line;line-height:2;max-height:240px;overflow:auto">' + escapeHtml(data.lyrics.substring(0, 1000)) + '</div>';
             if (meta) meta.textContent = '纯文本歌词';
             if (btnOffset) btnOffset.style.display = 'none';
+            if (btnClear) btnClear.style.display = 'inline-flex';
           } else {
             if (scroll) scroll.innerHTML = '<div class="lyrics-tip">未找到歌词，可点击右上角 🔍 搜词尝试手动搜索</div>';
             if (btnOffset) btnOffset.style.display = 'none';
+            if (btnClear) btnClear.style.display = 'none';
           }
         })
         .catch(function() {
           if (scroll) scroll.innerHTML = '<div class="lyrics-tip">歌词加载失败，请重试</div>';
         });
+    }
+
+    function clearCurrentLyrics() {
+      var currentItem = (currentIndex >= 0 && playlistItems[currentIndex]) ? playlistItems[currentIndex] : null;
+      if (!currentItem || !currentItem.key) {
+        alert('当前没有可清除歌词的歌曲');
+        return;
+      }
+      if (!confirm('确定清除「' + currentItem.name + '」的已缓存歌词吗？\n清除后您可以点击「🔍 搜词」手动重新搜索。')) return;
+
+      var key = getSongKey();
+      if (key) {
+        try { localStorage.removeItem('bear_manual_lyric_' + key); } catch (e) {}
+      }
+      try { localStorage.removeItem('bear_manual_lyric_' + currentItem.key); } catch (e) {}
+
+      fetch('/lyrics-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: currentItem.key })
+      })
+      .then(function(res) { return res.json(); })
+      .then(function(data) {
+        if (data.success) {
+          showToast('🗑️ 歌词缓存已成功清除！');
+          clearLyrics();
+          var scroll = document.getElementById('lyricsScroll');
+          if (scroll) scroll.innerHTML = '<div class="lyrics-tip">歌词已清除，可点击右上角「🔍 搜词」重新检索</div>';
+        } else {
+          showToast('清除失败: ' + (data.error || '未知错误'), true);
+        }
+      })
+      .catch(function(err) {
+        showToast('清除网络错误: ' + err.message, true);
+      });
     }
 
     audioPlayer.addEventListener('timeupdate', function() { updateLyricSync(audioPlayer.currentTime); });
@@ -2183,6 +2247,7 @@ function getManageHTMLContent() {
           '<div class="song-actions">' +
             (!isEditing ? '<button type="button" class="act-btn" onclick="togglePreview(\\'' + escapeHtml(song.file) + '\\', \\'' + escapeHtml(song.name) + '\\')">' + (isPlaying ? '⏸ 暂停' : '▶ 试听') + '</button>' : '') +
             (!isEditing ? '<button type="button" class="act-btn" onclick="startEdit(\\'' + song.key + '\\')">✏️ 编辑</button>' : '') +
+            (!isEditing ? '<button type="button" class="act-btn" onclick="clearSongLyrics(\\'' + song.key + '\\', \\'' + escapeHtml(song.name) + '\\')" title="清除该歌曲已缓存的歌词/字幕">📜 清词</button>' : '') +
             '<button type="button" class="act-btn act-btn-del" onclick="deleteSingle(\\'' + song.file + '\\', \\'' + escapeHtml(song.name) + '\\')">🗑️ 删除</button>' +
           '</div>' +
         '</div>';
@@ -2281,6 +2346,26 @@ function getManageHTMLContent() {
         }
       })
       .catch(err => console.warn('排序网络错误:', err.message));
+    }
+
+    function clearSongLyrics(key, name) {
+      if (!confirm('确定清除歌曲【' + name + '】的已缓存歌词/字幕吗？\\n清除后下次播放或手动搜词将重新获取。')) return;
+      fetch('/lyrics-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: key })
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.success) {
+          alert('已成功清除歌曲【' + name + '】的歌词缓存！');
+        } else {
+          alert('清除失败: ' + (data.error || '未知错误'));
+        }
+      })
+      .catch(function(err) {
+        alert('请求失败: ' + err.message);
+      });
     }
 
     function deleteSingle(file, name) {
@@ -2641,6 +2726,8 @@ function handleCacheDelete(req, res) {
       if (fs.existsSync(target)) fs.unlinkSync(target);
       const lrcTarget = path.join(CACHE_DIR, key + '.lrc');
       if (fs.existsSync(lrcTarget)) try { fs.unlinkSync(lrcTarget); } catch (e) {}
+      const nosubTarget = path.join(CACHE_DIR, key + '.nosub');
+      if (fs.existsSync(nosubTarget)) try { fs.unlinkSync(nosubTarget); } catch (e) {}
       deleteCacheMetadataEntry(key).then(() => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true }));
@@ -2743,6 +2830,10 @@ function handleCacheBatchDelete(req, res) {
             const lrcTarget = path.join(CACHE_DIR, key + '.lrc');
             if (fs.existsSync(lrcTarget)) {
               try { fs.unlinkSync(lrcTarget); } catch (e) {}
+            }
+            const nosubTarget = path.join(CACHE_DIR, key + '.nosub');
+            if (fs.existsSync(nosubTarget)) {
+              try { fs.unlinkSync(nosubTarget); } catch (e) {}
             }
           }
         });
@@ -3334,8 +3425,56 @@ function getYouTubeUrlByKey(key) {
   return null;
 }
 
+function hasNoSubMarker(key) {
+  if (!key) return false;
+  const noSubFile = path.join(CACHE_DIR, `${key}.nosub`);
+  if (fs.existsSync(noSubFile)) return true;
+  if (key.length >= 8 && key.length < 64) {
+    try {
+      const files = fs.readdirSync(CACHE_DIR);
+      if (files.some(f => f.startsWith(key) && f.endsWith('.nosub'))) return true;
+    } catch {}
+  }
+  return false;
+}
+
+function saveLocalLrcContent(key, lyrics, inputUrl) {
+  if (!key || !lyrics) return;
+  let fullKey = key;
+  if (key.length < 64) {
+    const metadata = readCacheMetadata();
+    const matched = Object.keys(metadata).find(k => k.startsWith(key));
+    if (matched) fullKey = matched;
+  }
+  const targetLrc = path.join(CACHE_DIR, `${fullKey}.lrc`);
+  try {
+    fs.writeFileSync(targetLrc, lyrics, 'utf8');
+  } catch (e) {
+    console.warn('[lyrics] Failed to write .lrc file:', e.message);
+  }
+
+  const noSubFile = path.join(CACHE_DIR, `${fullKey}.nosub`);
+  if (fs.existsSync(noSubFile)) {
+    try { fs.unlinkSync(noSubFile); } catch {}
+  }
+
+  const ytUrl = (inputUrl && validateYouTubeUrl(inputUrl)) ? inputUrl : getYouTubeUrlByKey(fullKey);
+  if (ytUrl) {
+    const mp3Key = getYouTubeCacheKey(ytUrl, 'mp3');
+    const mp4Key = getYouTubeCacheKey(ytUrl, 'mp4');
+    [mp3Key, mp4Key].forEach(k => {
+      if (k && k !== fullKey) {
+        try { fs.writeFileSync(path.join(CACHE_DIR, `${k}.lrc`), lyrics, 'utf8'); } catch {}
+        const nosub = path.join(CACHE_DIR, `${k}.nosub`);
+        if (fs.existsSync(nosub)) try { fs.unlinkSync(nosub); } catch {}
+      }
+    });
+  }
+}
+
 async function fetchYouTubeSubtitles(inputUrl, key) {
   if (!validateYouTubeUrl(inputUrl)) return null;
+  if (hasNoSubMarker(key)) return null;
 
   const tempPrefix = path.join(CACHE_DIR, `ytsub_${key}_${Date.now()}`);
   const ytArgs = [
@@ -3397,21 +3536,8 @@ async function fetchYouTubeSubtitles(inputUrl, key) {
   }
 
   if (lrcText && lrcText.trim()) {
-    const targetLrc = path.join(CACHE_DIR, `${key}.lrc`);
-    try {
-      fs.writeFileSync(targetLrc, lrcText, 'utf8');
-      const mp3Key = getYouTubeCacheKey(inputUrl, 'mp3');
-      const mp4Key = getYouTubeCacheKey(inputUrl, 'mp4');
-      if (mp3Key && mp3Key !== key) {
-        try { fs.writeFileSync(path.join(CACHE_DIR, `${mp3Key}.lrc`), lrcText, 'utf8'); } catch {}
-      }
-      if (mp4Key && mp4Key !== key) {
-        try { fs.writeFileSync(path.join(CACHE_DIR, `${mp4Key}.lrc`), lrcText, 'utf8'); } catch {}
-      }
-      console.log(`[lyrics] Saved YouTube subtitle for ${key.slice(0, 10)} (${lrcText.split('\n').length} lines)`);
-    } catch (e) {
-      console.warn('[lyrics] Failed to write .lrc file:', e.message);
-    }
+    saveLocalLrcContent(key, lrcText, inputUrl);
+    console.log(`[lyrics] Saved YouTube subtitle for ${key.slice(0, 10)} (${lrcText.split('\n').length} lines)`);
     return lrcText;
   }
 
@@ -3423,9 +3549,10 @@ async function handleLyrics(url, res) {
   const key = (url.searchParams.get('key') || '').trim();
   const songUrl = (url.searchParams.get('url') || '').trim();
   const force = url.searchParams.get('force') === '1';
+  const manual = url.searchParams.get('manual') === '1';
 
   // 1. 若非手动重新搜索，优先直接读取本地已有缓存歌词/字幕 (cache/<key>.lrc)
-  if (!force && key) {
+  if (!force && !manual && key) {
     const localLrc = getLocalLrcContent(key);
     if (localLrc) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -3439,9 +3566,9 @@ async function handleLyrics(url, res) {
     }
   }
 
-  // 2. 若是 YouTube 视频，优先提取并解析 YouTube 原生字幕
+  // 2. 若是 YouTube 视频，且未被用户清词、且非用户手动搜词模式，字幕优先级最高
   const targetYtUrl = (songUrl && validateYouTubeUrl(songUrl)) ? songUrl : getYouTubeUrlByKey(key);
-  if (targetYtUrl) {
+  if (!manual && targetYtUrl && !hasNoSubMarker(key)) {
     const ytKey = key || getYouTubeCacheKey(targetYtUrl, 'mp3');
     try {
       const ytLrc = await fetchYouTubeSubtitles(targetYtUrl, ytKey);
@@ -3460,7 +3587,8 @@ async function handleLyrics(url, res) {
     }
   }
 
-  // 3. 兜底策略：全网检索（酷狗 -> 网易云 -> lrclib）
+  // 3. 国内平台歌词检索（酷狗 -> 网易云 -> lrclib）
+  //    用于：无字幕时的自动兜底；或用户点击「🔍 搜词」时直接在国内平台重新找
   if (!rawTitle) {
     res.writeHead(400, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'title required' }));
@@ -3482,10 +3610,8 @@ async function handleLyrics(url, res) {
   }
 
   if (result && result.lyrics) {
-    if (key && /^[a-f0-9]{64}$/.test(key)) {
-      try {
-        fs.writeFileSync(path.join(CACHE_DIR, `${key}.lrc`), result.lyrics, 'utf8');
-      } catch (e) {}
+    if (key && /^[a-f0-9]{8,64}$/i.test(key)) {
+      saveLocalLrcContent(key, result.lyrics, targetYtUrl);
     }
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(result));
@@ -3493,6 +3619,73 @@ async function handleLyrics(url, res) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ lyrics: null }));
   }
+}
+
+function handleLyricsDelete(req, res) {
+  let body = '';
+  req.on('data', chunk => body += chunk);
+  req.on('end', () => {
+    try {
+      const data = JSON.parse(body || '{}');
+      const key = String(data.key || '').trim();
+      if (!key || !/^[a-f0-9]{8,64}$/i.test(key)) {
+        throw new Error('无效的歌曲标识');
+      }
+
+      let deletedCount = 0;
+      let fullKey = key;
+      const metadata = readCacheMetadata();
+      if (key.length < 64) {
+        const matched = Object.keys(metadata).find(k => k.startsWith(key));
+        if (matched) fullKey = matched;
+      }
+
+      const targetLrc = path.join(CACHE_DIR, `${fullKey}.lrc`);
+      if (fs.existsSync(targetLrc)) {
+        try { fs.unlinkSync(targetLrc); deletedCount++; } catch {}
+      }
+
+      // 清除前缀匹配的 .lrc 及临时字幕文件
+      try {
+        const files = fs.readdirSync(CACHE_DIR);
+        files.forEach(f => {
+          if ((f.startsWith(key) && f.endsWith('.lrc')) || (f.startsWith(`ytsub_${key}`))) {
+            try {
+              fs.unlinkSync(path.join(CACHE_DIR, f));
+              deletedCount++;
+            } catch {}
+          }
+        });
+      } catch {}
+
+      // 若为 YouTube 歌曲，同时清理对应的 mp3/mp4 格式歌词并打上 nosub 标记
+      const ytUrl = getYouTubeUrlByKey(fullKey);
+      if (ytUrl) {
+        const mp3Key = getYouTubeCacheKey(ytUrl, 'mp3');
+        const mp4Key = getYouTubeCacheKey(ytUrl, 'mp4');
+        [mp3Key, mp4Key].forEach(k => {
+          if (k) {
+            const p = path.join(CACHE_DIR, `${k}.lrc`);
+            if (fs.existsSync(p)) {
+              try { fs.unlinkSync(p); deletedCount++; } catch {}
+            }
+            try { fs.writeFileSync(path.join(CACHE_DIR, `${k}.nosub`), '', 'utf8'); } catch {}
+          }
+        });
+      }
+
+      // 创建 nosub 标记，防止再次播放时立即重复拉取已被用户清除的错误字幕
+      try {
+        fs.writeFileSync(path.join(CACHE_DIR, `${fullKey}.nosub`), '', 'utf8');
+      } catch {}
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, deleted: deletedCount }));
+    } catch (e) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: e.message }));
+    }
+  });
 }
 
 // ==================== 24小时免登分享功能 ====================
