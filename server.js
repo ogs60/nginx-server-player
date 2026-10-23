@@ -183,6 +183,10 @@ const server = http.createServer((req, res) => {
   } else if (requestUrl.pathname === '/mc') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(getManageHTMLContent());
+  } else if (requestUrl.pathname === '/share-link') {
+    handleShareLink(req, res, requestUrl);
+  } else if (requestUrl.pathname === '/s' || requestUrl.pathname.startsWith('/s/')) {
+    handleShareRoute(req, res, requestUrl);
   } else if (requestUrl.pathname === '/cache-update') {
     handleCacheUpdate(req, res);
   } else if (requestUrl.pathname === '/cache-reorder') {
@@ -317,6 +321,28 @@ function getHTMLContent(startTime, visitorCount, startDate) {
     }
     .value {
       color: #333;
+    }
+    .share-btn {
+      margin-left: 8px;
+      padding: 2px 8px;
+      font-size: 11px;
+      color: #667eea;
+      background: #f0f4ff;
+      border: 1px solid #d0dbff;
+      border-radius: 4px;
+      cursor: pointer;
+      flex-shrink: 0;
+      white-space: nowrap;
+      transition: all 0.2s ease;
+    }
+    .share-btn:hover {
+      background: #667eea;
+      color: #fff;
+      border-color: #667eea;
+      transform: translateY(-1px);
+    }
+    .share-btn:active {
+      transform: translateY(0);
     }
     .player-section {
       background: #f5f5f5;
@@ -927,8 +953,10 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       const itemsHtml = pageEntries.length ? pageEntries.map(entry => {
         const item = entry.item;
         const index = entry.index;
+        const shareBtn = item.key ? '<button type="button" class="share-btn" onclick="shareSong(' + index + ', event)" title="生成24小时免登分享链接">🔗 分享</button>' : '';
         return '<div style="display:flex;align-items:center;padding:5px 0;' + (index === currentIndex ? 'font-weight:bold;color:#667eea;' : '') + '">' +
-          '<span style="flex:1;cursor:pointer" onclick="playItem(' + index + ')" title="点击播放">' + (index + 1) + '. ' + escapeHtml(item.name) + ' <small style="color:#888">[' + (item.cached ? '本地缓存' : item.local ? '本地文件' : 'URL') + ']</small></span>' +
+          '<span style="flex:1;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" onclick="playItem(' + index + ')" title="点击播放">' + (index + 1) + '. ' + escapeHtml(item.name) + ' <small style="color:#888">[' + (item.cached ? '本地缓存' : item.local ? '本地文件' : 'URL') + ']</small></span>' +
+          shareBtn +
           '</div>';
       }).join('') : '<div style="text-align:center;color:#888;padding:12px;font-size:12px;">未在播放列表中找到匹配歌曲</div>';
 
@@ -978,6 +1006,68 @@ function getHTMLContent(startTime, visitorCount, startDate) {
 
     function escapeHtml(value) {
       return String(value).replace(/[&<>'"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','\\'':'&#39;','"':'&quot;'}[char]));
+    }
+
+    function showToast(message, isError) {
+      var toast = document.getElementById('mcToast');
+      if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'mcToast';
+        toast.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.88);color:#fff;padding:10px 22px;border-radius:24px;font-size:13px;z-index:99999;box-shadow:0 6px 20px rgba(0,0,0,0.3);transition:all 0.3s ease;opacity:0;pointer-events:none;max-width:90%;text-align:center;word-break:break-all;line-height:1.4;';
+        document.body.appendChild(toast);
+      }
+      toast.style.background = isError ? 'rgba(220,53,69,0.92)' : 'rgba(40,167,69,0.92)';
+      toast.textContent = message;
+      toast.style.opacity = '1';
+      toast.style.top = '30px';
+      clearTimeout(toast._timer);
+      toast._timer = setTimeout(function() {
+        toast.style.opacity = '0';
+        toast.style.top = '20px';
+      }, 3500);
+    }
+
+    function shareSong(index, event) {
+      if (event) {
+        if (typeof event.stopPropagation === 'function') event.stopPropagation();
+        if (typeof event.preventDefault === 'function') event.preventDefault();
+      }
+      var item = playlistItems[index];
+      if (!item || !item.key) return;
+      var btn = event ? event.currentTarget : null;
+      var origText = btn ? btn.textContent : '';
+      if (btn) {
+        btn.textContent = '⏳ 生成中';
+        btn.disabled = true;
+      }
+      fetch('/share-link?key=' + encodeURIComponent(item.key))
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+          if (btn) {
+            btn.textContent = origText;
+            btn.disabled = false;
+          }
+          if (!data || !data.url) {
+            throw new Error(data && data.error ? data.error : '生成分享链接失败');
+          }
+          var shareUrl = data.url;
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(shareUrl).then(function() {
+              showToast('🔗 已复制分享链接！(24小时内有效)');
+            }).catch(function() {
+              prompt('请手动复制以下分享链接 (24小时内有效):', shareUrl);
+            });
+          } else {
+            prompt('请手动复制以下分享链接 (24小时内有效):', shareUrl);
+          }
+        })
+        .catch(function(err) {
+          if (btn) {
+            btn.textContent = origText;
+            btn.disabled = false;
+          }
+          showToast('❌ 分享失败: ' + err.message, true);
+        });
     }
 
     function addPlaylistItem(item) {
@@ -1138,6 +1228,10 @@ function getHTMLContent(startTime, visitorCount, startDate) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ url: inputUrl, format })
         }).then(response => response.json()).then(data => {
+          if (data.key) {
+            item.key = data.key;
+            renderPlaylist();
+          }
           if (data.title) {
             applyUrlTitle(item.url, data.title);
             updateCacheMetadata({ url: item.url, name: data.title, format });
@@ -1298,7 +1392,12 @@ function getHTMLContent(startTime, visitorCount, startDate) {
             progressText.textContent = data.cached ? '已缓存，可直接播放' : (percent > 0 ? taskLabel + ' ' + percent.toFixed(1) + '%' : item.format === 'mp4' ? '正在解析和下载视频...' : '正在解析和转换音频...');
             if (data.cached || data.status === 'error') {
               clearInterval(timer);
-              if (data.cached) setTimeout(() => { progressWrap.style.display = 'none'; }, 1200);
+              if (data.cached) {
+                item.cached = true;
+                if (data.key) item.key = data.key;
+                renderPlaylist();
+                setTimeout(() => { progressWrap.style.display = 'none'; }, 1200);
+              }
             }
           }).catch(() => {});
       }, 500);
@@ -2736,7 +2835,7 @@ function handleCacheProgress(url, res) {
   const progress = DOWNLOAD_PROGRESS.get(key) || {};
   if (fs.existsSync(cachePath) && fs.statSync(cachePath).size > 0) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ cached: true, percent: 100 }));
+    res.end(JSON.stringify({ cached: true, percent: 100, key }));
     return;
   }
   res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -2769,13 +2868,12 @@ async function handleGetAudioUrl(req, res) {
       } catch (e) {
         console.warn('Title lookup failed; metadata will be saved after a successful title lookup:', e.message);
       }
-      const finalTitle = title.substring(0, 200);
+      const key = getYouTubeCacheKey(inputUrl, format);
       if (finalTitle) {
-        const key = getYouTubeCacheKey(inputUrl, format);
         writeCacheMetadataEntry(key, { url: inputUrl, title: finalTitle });
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ success: true, title: finalTitle }));
+      res.end(JSON.stringify({ success: true, title: finalTitle, key }));
     } catch (e) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: false, error: e.message.substring(0, 200) }));
@@ -3141,6 +3239,790 @@ async function handleLyrics(url, res) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ lyrics: null }));
   }
+}
+
+// ==================== 24小时免登分享功能 ====================
+function getOrCreateShareSecret() {
+  if (process.env.SHARE_SECRET) {
+    return process.env.SHARE_SECRET;
+  }
+  const secretFile = path.join(CACHE_DIR, '.share_secret');
+  try {
+    if (fs.existsSync(secretFile)) {
+      const content = fs.readFileSync(secretFile, 'utf8').trim();
+      if (content) return content;
+    }
+  } catch (e) {}
+  const newSecret = crypto.randomBytes(32).toString('hex');
+  try {
+    fs.writeFileSync(secretFile, newSecret, 'utf8');
+  } catch (e) {
+    console.warn('Failed to save share secret to disk, using in-memory secret:', e.message);
+  }
+  return newSecret;
+}
+const SHARE_SECRET = getOrCreateShareSecret();
+
+function escapeHtmlServer(value) {
+  return String(value || '').replace(/[&<>'"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','\'':'&#39;','"':'&quot;'}[char]));
+}
+
+function signShare(shortKey, expires) {
+  return crypto.createHmac('sha256', SHARE_SECRET)
+    .update(`${shortKey}:${expires}`)
+    .digest('hex')
+    .slice(0, 16);
+}
+
+function verifyShareSignature(shortKey, expires, sign) {
+  if (!shortKey || !expires || !sign) return false;
+  const expected = signShare(shortKey, expires);
+  if (expected.length !== sign.length) return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(sign));
+  } catch (e) {
+    return false;
+  }
+}
+
+function findCacheFileByShortKey(shortKey) {
+  if (!shortKey || shortKey.length < 8) return null;
+  let files = [];
+  try {
+    files = fs.readdirSync(CACHE_DIR);
+  } catch (e) {
+    return null;
+  }
+  const matched = files.find(f => f.startsWith(shortKey) && /\.(mp3|wav|m4a|aac|ogg|flac|mp4|webm|mov)$/i.test(f));
+  if (!matched) return null;
+  const fullKey = matched.replace(/\.[^.]+$/, '');
+  const ext = path.extname(matched).toLowerCase();
+  const metadata = readCacheMetadata();
+  const meta = metadata[matched] || metadata[fullKey] || {};
+  return {
+    file: matched,
+    fullKey: fullKey,
+    path: path.join(CACHE_DIR, matched),
+    ext: ext,
+    isVideo: /\.(mp4|webm|mov)$/i.test(ext),
+    title: meta.title || '分享歌曲 ' + shortKey,
+    url: meta.url || ''
+  };
+}
+
+function getShareBaseUrl(req) {
+  if (process.env.SHARE_BASE_URL) return process.env.SHARE_BASE_URL.replace(/\/+$/, '');
+  const host = req.headers['x-forwarded-host'] || req.headers.host || '';
+  const proto = req.headers['x-forwarded-proto'] || (req.connection && req.connection.encrypted ? 'https' : 'http');
+  if (host && (host.includes('localhost') || host.includes('127.0.0.1') || /^192\.168\./.test(host) || /^10\./.test(host))) {
+    return `${proto}://${host}`;
+  }
+  return 'https://mc.azhuan.ren';
+}
+
+function handleShareLink(req, res, url) {
+  const fullKey = (url.searchParams.get('key') || '').trim();
+  if (!fullKey) {
+    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ error: '缺少歌曲 key' }));
+    return;
+  }
+  // 截取 10 位短 hash (8-12位均可)
+  const shortKey = fullKey.slice(0, 10);
+  const song = findCacheFileByShortKey(shortKey);
+  if (!song) {
+    res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ error: '未在服务器缓存中找到该歌曲' }));
+    return;
+  }
+  // 24小时有效
+  const expires = Date.now() + 24 * 60 * 60 * 1000;
+  const sign = signShare(shortKey, expires);
+  const baseUrl = getShareBaseUrl(req);
+  const shareUrl = `${baseUrl}/s/${shortKey}?t=${expires}&s=${sign}`;
+  res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify({
+    success: true,
+    url: shareUrl,
+    shortKey: shortKey,
+    title: song.title,
+    expires: expires
+  }));
+}
+
+function handleShareRoute(req, res, url) {
+  const pathname = url.pathname;
+
+  // 歌词请求: /s/lyrics?title=...
+  if (pathname === '/s/lyrics') {
+    handleLyrics(url, res);
+    return;
+  }
+
+  // 媒体流请求: /s/media/:shortKey?t=...&s=...
+  if (pathname.startsWith('/s/media/')) {
+    const shortKey = pathname.slice('/s/media/'.length).trim();
+    const t = url.searchParams.get('t');
+    const s = url.searchParams.get('s');
+
+    if (!verifyShareSignature(shortKey, t, s)) {
+      res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Forbidden: 签名无效');
+      return;
+    }
+    if (Date.now() > Number(t)) {
+      res.writeHead(410, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Gone: 分享已过期 (24小时)');
+      return;
+    }
+
+    const song = findCacheFileByShortKey(shortKey);
+    if (!song || !fs.existsSync(song.path)) {
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('File not found');
+      return;
+    }
+
+    const contentType = song.isVideo ? 'video/mp4' : (song.ext === '.flac' ? 'audio/flac' : (song.ext === '.wav' ? 'audio/wav' : 'audio/mpeg'));
+    streamAudioFile(req, res, song.path, contentType);
+    return;
+  }
+
+  // 落地播放页: /s/:shortKey?t=...&s=...
+  const shortKey = pathname.slice('/s/'.length).trim();
+  if (!shortKey) {
+    res.writeHead(302, { 'Location': '/' });
+    res.end();
+    return;
+  }
+
+  const t = url.searchParams.get('t');
+  const s = url.searchParams.get('s');
+
+  if (!verifyShareSignature(shortKey, t, s)) {
+    res.writeHead(403, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(renderShareErrorHTML('⚠️ 分享链接无效', '该链接不完整或验证签名不匹配，请向好友获取最新分享链接。'));
+    return;
+  }
+
+  const expNum = Number(t);
+  if (Date.now() > expNum) {
+    const expDateStr = new Date(expNum).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+    res.writeHead(410, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(renderShareErrorHTML('⏳ 分享链接已过期', `该分享链接的 24 小时有效期已于 <strong>${expDateStr}</strong> 截止。<br><br>歌曲资源仍在服务器，您可以联系好友重新生成分享链接。`));
+    return;
+  }
+
+  const song = findCacheFileByShortKey(shortKey);
+  if (!song) {
+    res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(renderShareErrorHTML('🎵 歌曲不存在', '该歌曲已被服务器移除或无法读取。'));
+    return;
+  }
+
+  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+  res.end(renderSharePlayerHTML(song, shortKey, t, s));
+}
+
+function renderShareErrorHTML(title, message) {
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>${escapeHtmlServer(title)} - 熊宝宝音乐</title>
+  <link rel="icon" type="image/svg+xml" href="/logo.svg">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: radial-gradient(circle at 50% 30%, #282a36 0%, #171822 100%);
+      color: #fff;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .card {
+      background: rgba(255, 255, 255, 0.08);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 20px;
+      padding: 36px 28px;
+      max-width: 420px;
+      width: 100%;
+      text-align: center;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+    }
+    .logo { width: 90px; height: 75px; margin: 0 auto 16px; display: block; filter: drop-shadow(0 4px 12px rgba(0,0,0,0.3)); }
+    h1 { font-size: 20px; margin-bottom: 12px; color: #ffb86c; }
+    p { font-size: 14px; line-height: 1.6; color: rgba(255, 255, 255, 0.75); margin-bottom: 24px; }
+    .btn {
+      display: inline-block;
+      padding: 9px 26px;
+      background: #667eea;
+      color: #fff;
+      border-radius: 24px;
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 500;
+      transition: background 0.2s;
+    }
+    .btn:hover { background: #5a67d8; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <img src="/logo.svg" alt="熊宝宝" class="logo">
+    <h1>${escapeHtmlServer(title)}</h1>
+    <p>${message}</p>
+    <a href="/" class="btn">前往播放器首页</a>
+  </div>
+</body>
+</html>`;
+}
+
+function renderSharePlayerHTML(song, shortKey, t, s) {
+  const safeTitle = escapeHtmlServer(song.title);
+  const mediaUrl = `/s/media/${encodeURIComponent(shortKey)}?t=${encodeURIComponent(t)}&s=${encodeURIComponent(s)}`;
+  const lyricsUrl = `/s/lyrics?title=${encodeURIComponent(song.title)}`;
+  const expNum = Number(t) || 0;
+
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>🎵 ${safeTitle} - 熊宝宝音乐分享</title>
+  <link rel="icon" type="image/svg+xml" href="/logo.svg">
+  <meta name="theme-color" content="#1a1b26">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: radial-gradient(circle at 50% 25%, #2a2d42 0%, #14151f 100%);
+      color: #fff;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 20px 14px;
+      -webkit-font-smoothing: antialiased;
+    }
+    .container {
+      width: 100%;
+      max-width: 440px;
+      background: rgba(255, 255, 255, 0.08);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 24px;
+      padding: 24px 20px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+      text-align: center;
+      position: relative;
+    }
+    .brand-header {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    .brand-logo {
+      width: 26px;
+      height: 22px;
+    }
+    .brand-text {
+      font-size: 13px;
+      color: rgba(255, 255, 255, 0.7);
+      font-weight: 500;
+      letter-spacing: 0.5px;
+    }
+    .badge-pill {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 12px;
+      background: rgba(102, 126, 234, 0.25);
+      color: #a3bffa;
+      border: 1px solid rgba(102, 126, 234, 0.4);
+      margin-left: 4px;
+    }
+    .disc-container {
+      position: relative;
+      width: 190px;
+      height: 190px;
+      margin: 10px auto 16px;
+    }
+    .vinyl-disc {
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      background: radial-gradient(circle, #2b2b36 0%, #15151c 65%, #0d0d12 100%);
+      border: 5px solid rgba(255, 255, 255, 0.12);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6), inset 0 0 0 2px rgba(255, 255, 255, 0.05), inset 0 0 0 10px rgba(0,0,0,0.5), inset 0 0 0 24px rgba(255, 255, 255, 0.03), inset 0 0 0 40px rgba(0,0,0,0.4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      animation: spinVinyl 18s linear infinite;
+      animation-play-state: paused;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .vinyl-disc.playing {
+      animation-play-state: running;
+    }
+    @keyframes spinVinyl {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    .vinyl-center {
+      width: 72px;
+      height: 72px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      border: 3px solid rgba(255, 255, 255, 0.35);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .vinyl-center img {
+      width: 44px;
+      height: 35px;
+    }
+    .play-overlay-hint {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 52px;
+      height: 52px;
+      border-radius: 50%;
+      background: rgba(0, 0, 0, 0.65);
+      border: 2px solid rgba(255, 255, 255, 0.8);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+      transition: opacity 0.3s;
+      box-shadow: 0 0 20px rgba(102, 126, 234, 0.6);
+    }
+    .play-overlay-hint svg {
+      margin-left: 3px;
+      fill: #fff;
+    }
+    .video-wrap {
+      width: 100%;
+      margin: 10px 0 16px;
+      border-radius: 14px;
+      overflow: hidden;
+      background: #000;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    }
+    .video-wrap video {
+      width: 100%;
+      display: block;
+      max-height: 50vh;
+      outline: none;
+    }
+    .song-title {
+      font-size: 18px;
+      font-weight: 700;
+      color: #fff;
+      line-height: 1.4;
+      margin: 4px 0 8px;
+      word-break: break-all;
+    }
+    .song-meta {
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.6);
+      margin-bottom: 12px;
+    }
+    .lyrics-container {
+      height: 130px;
+      overflow-y: hidden;
+      position: relative;
+      margin: 12px 0 16px;
+      mask-image: linear-gradient(transparent, black 25%, black 75%, transparent);
+      -webkit-mask-image: linear-gradient(transparent, black 25%, black 75%, transparent);
+    }
+    .lyrics-scroll {
+      transition: transform 0.35s cubic-bezier(0.25, 0.1, 0.25, 1);
+      padding: 40px 0;
+    }
+    .lyric-line {
+      font-size: 13px;
+      line-height: 28px;
+      height: 28px;
+      color: rgba(255, 255, 255, 0.45);
+      transition: color 0.3s, font-size 0.3s, transform 0.3s;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      padding: 0 10px;
+    }
+    .lyric-line.active {
+      color: #a3bffa;
+      font-size: 15px;
+      font-weight: 600;
+      transform: scale(1.05);
+      text-shadow: 0 0 14px rgba(102, 126, 234, 0.8);
+    }
+    .progress-section {
+      margin-top: 10px;
+    }
+    .progress-bar-bg {
+      width: 100%;
+      height: 6px;
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 3px;
+      cursor: pointer;
+      position: relative;
+      overflow: hidden;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #667eea, #9f7aea);
+      border-radius: 3px;
+      transition: width 0.1s linear;
+    }
+    .time-labels {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.5);
+      margin-top: 6px;
+    }
+    .controls-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+      margin: 16px 0 10px;
+    }
+    .ctrl-btn {
+      background: none;
+      border: none;
+      color: rgba(255, 255, 255, 0.8);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 6px;
+      border-radius: 50%;
+      transition: all 0.2s;
+    }
+    .ctrl-btn:hover {
+      color: #fff;
+      transform: scale(1.1);
+    }
+    .ctrl-btn-play {
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: #fff;
+      box-shadow: 0 6px 20px rgba(102, 126, 234, 0.5);
+    }
+    .ctrl-btn-play:hover {
+      transform: scale(1.06);
+      box-shadow: 0 8px 24px rgba(102, 126, 234, 0.7);
+    }
+    .expire-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 5px 12px;
+      background: rgba(255, 255, 255, 0.06);
+      border-radius: 14px;
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.55);
+      margin-top: 14px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+  </style>
+</head>
+<body>
+  <div class="container" id="playerCard">
+    <div class="brand-header">
+      <img src="/logo.svg" alt="熊宝宝" class="brand-logo">
+      <span class="brand-text">熊宝宝音乐</span>
+      <span class="badge-pill">好友分享</span>
+    </div>
+
+    ${song.isVideo ? `
+    <div class="video-wrap">
+      <video id="mediaPlayer" src="${mediaUrl}" controls playsinline autoplay></video>
+    </div>
+    ` : `
+    <div class="disc-container" id="discBox" onclick="togglePlay()">
+      <div class="vinyl-disc" id="vinylDisc">
+        <div class="vinyl-center">
+          <img src="/logo.svg" alt="熊宝宝">
+        </div>
+      </div>
+      <div class="play-overlay-hint" id="playHint">
+        <svg viewBox="0 0 24 24" width="28" height="28"><path d="M8 5v14l11-7z"/></svg>
+      </div>
+    </div>
+    `}
+
+    <div class="song-title">${safeTitle}</div>
+    <div class="song-meta">${song.isVideo ? '🎬 高清视频' : '🎵 高品质音频'} · 服务器本地极速直出</div>
+
+    ${!song.isVideo ? `
+    <div class="lyrics-container" id="lyricsContainer">
+      <div class="lyrics-scroll" id="lyricsScroll">
+        <div class="lyric-line active" id="lrcStatus">正在加载歌词...</div>
+      </div>
+    </div>
+
+    <div class="progress-section">
+      <div class="progress-bar-bg" id="progressBg" onclick="seekAudio(event)">
+        <div class="progress-bar-fill" id="progressFill"></div>
+      </div>
+      <div class="time-labels">
+        <span id="curTime">00:00</span>
+        <span id="durTime">--:--</span>
+      </div>
+    </div>
+
+    <div class="controls-row">
+      <button type="button" class="ctrl-btn" onclick="skipTime(-10)" title="后退10秒">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.22 3.16-1.98 5.12-1.98 3.53 0 6.47 2.44 7.29 5.75l2.42-.77C21.03 11.08 17.2 8 12.5 8z"/><text x="12" y="18" font-size="7" font-weight="bold" text-anchor="middle" fill="currentColor">10</text></svg>
+      </button>
+
+      <button type="button" class="ctrl-btn ctrl-btn-play" id="mainPlayBtn" onclick="togglePlay()" title="播放/暂停">
+        <svg id="playIcon" viewBox="0 0 24 24" width="30" height="30" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+        <svg id="pauseIcon" viewBox="0 0 24 24" width="30" height="30" fill="currentColor" style="display:none;"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+      </button>
+
+      <button type="button" class="ctrl-btn" onclick="skipTime(10)" title="快进10秒">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M11.5 8c2.65 0 5.05.99 6.9 2.6L22 7v9h-9l3.62-3.62c-1.39-1.22-3.16-1.98-5.12-1.98-3.53 0-6.47 2.44-7.29 5.75l-2.42-.77C2.97 11.08 6.8 8 11.5 8z"/><text x="12" y="18" font-size="7" font-weight="bold" text-anchor="middle" fill="currentColor">10</text></svg>
+      </button>
+
+      <button type="button" class="ctrl-btn" id="muteBtn" onclick="toggleMute()" title="静音切换">
+        <svg id="volIcon" viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/></svg>
+        <svg id="muteIcon" viewBox="0 0 24 24" width="20" height="20" fill="currentColor" style="display:none;"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg>
+      </button>
+    </div>
+
+    <audio id="mediaPlayer" src="${mediaUrl}" preload="auto" playsinline></audio>
+    ` : ''}
+
+    <div>
+      <div class="expire-pill">
+        <span>⏰ 24小时有效通道</span>
+        <span>·</span>
+        <span id="remainCount">计算中...</span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    var player = document.getElementById('mediaPlayer');
+    var isVideo = ${song.isVideo ? 'true' : 'false'};
+    var vinylDisc = document.getElementById('vinylDisc');
+    var playHint = document.getElementById('playHint');
+    var playIcon = document.getElementById('playIcon');
+    var pauseIcon = document.getElementById('pauseIcon');
+    var curTime = document.getElementById('curTime');
+    var durTime = document.getElementById('durTime');
+    var progressFill = document.getElementById('progressFill');
+    var progressBg = document.getElementById('progressBg');
+    var lyricsScroll = document.getElementById('lyricsScroll');
+    var lrcStatus = document.getElementById('lrcStatus');
+    var remainCount = document.getElementById('remainCount');
+    var volIcon = document.getElementById('volIcon');
+    var muteIcon = document.getElementById('muteIcon');
+    var expireTime = ${expNum};
+    var lrcData = [];
+    var curLrcIndex = -1;
+
+    function formatTime(s) {
+      if (!s || isNaN(s)) return '00:00';
+      var m = Math.floor(s / 60);
+      var sec = Math.floor(s % 60);
+      return (m < 10 ? '0' : '') + m + ':' + (sec < 10 ? '0' : '') + sec;
+    }
+
+    function updateExpireCountdown() {
+      var diff = expireTime - Date.now();
+      if (diff <= 0) {
+        remainCount.textContent = '链接已过期';
+        if (player) player.pause();
+        return;
+      }
+      var h = Math.floor(diff / (1000 * 60 * 60));
+      var m = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+      remainCount.textContent = '剩余约 ' + (h > 0 ? (h + ' 小时 ') : '') + m + ' 分钟';
+    }
+    updateExpireCountdown();
+    setInterval(updateExpireCountdown, 30000);
+
+    function togglePlay() {
+      if (!player) return;
+      if (player.paused) {
+        player.play().catch(function(e) { console.warn('播放被阻止:', e); });
+      } else {
+        player.pause();
+      }
+    }
+
+    function skipTime(delta) {
+      if (!player) return;
+      player.currentTime = Math.max(0, Math.min(player.duration || 0, player.currentTime + delta));
+    }
+
+    function toggleMute() {
+      if (!player) return;
+      player.muted = !player.muted;
+      if (volIcon && muteIcon) {
+        volIcon.style.display = player.muted ? 'none' : 'block';
+        muteIcon.style.display = player.muted ? 'block' : 'none';
+      }
+    }
+
+    function seekAudio(e) {
+      if (!player || !player.duration || !progressBg) return;
+      var rect = progressBg.getBoundingClientRect();
+      var ratio = (e.clientX - rect.left) / rect.width;
+      player.currentTime = Math.max(0, Math.min(player.duration, ratio * player.duration));
+    }
+
+    if (player) {
+      player.addEventListener('play', function() {
+        if (vinylDisc) vinylDisc.classList.add('playing');
+        if (playHint) playHint.style.opacity = '0';
+        if (playIcon) playIcon.style.display = 'none';
+        if (pauseIcon) pauseIcon.style.display = 'block';
+      });
+
+      player.addEventListener('pause', function() {
+        if (vinylDisc) vinylDisc.classList.remove('playing');
+        if (playHint) playHint.style.opacity = '1';
+        if (playIcon) playIcon.style.display = 'block';
+        if (pauseIcon) pauseIcon.style.display = 'none';
+      });
+
+      player.addEventListener('timeupdate', function() {
+        if (!isVideo) {
+          var cur = player.currentTime || 0;
+          var dur = player.duration || 0;
+          if (curTime) curTime.textContent = formatTime(cur);
+          if (durTime && dur) durTime.textContent = formatTime(dur);
+          if (progressFill && dur) progressFill.style.width = ((cur / dur) * 100) + '%';
+          updateLyrics(cur);
+        }
+      });
+
+      player.addEventListener('loadedmetadata', function() {
+        if (durTime) durTime.textContent = formatTime(player.duration);
+      });
+
+      var playPromise = player.play();
+      if (playPromise !== undefined) {
+        playPromise.catch(function() {
+          if (playHint) playHint.style.opacity = '1';
+          function onceClick() {
+            player.play().catch(function() {});
+            document.removeEventListener('click', onceClick);
+            document.removeEventListener('touchend', onceClick);
+          }
+          document.addEventListener('click', onceClick);
+          document.addEventListener('touchend', onceClick);
+        });
+      }
+    }
+
+    if (!isVideo) {
+      fetch('${lyricsUrl}')
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+          if (!data || !data.lyrics) {
+            if (lrcStatus) lrcStatus.textContent = '🎵 纯享播放模式 · 聆听音乐';
+            return;
+          }
+          parseLrc(data.lyrics);
+        })
+        .catch(function() {
+          if (lrcStatus) lrcStatus.textContent = '🎵 纯音乐 / 暂未匹配到歌词';
+        });
+    }
+
+    function parseLrc(text) {
+      var lines = text.split('\\n');
+      var list = [];
+      var timeRegex = /\\[(\\d{2}):(\\d{2})(?:\\.(\\d{1,3}))?\\]/g;
+      for (var i = 0; i < lines.length; i++) {
+        var line = lines[i].trim();
+        var match;
+        timeRegex.lastIndex = 0;
+        var textContent = line.replace(timeRegex, '').trim();
+        if (!textContent) continue;
+        timeRegex.lastIndex = 0;
+        while ((match = timeRegex.exec(line)) !== null) {
+          var min = parseInt(match[1], 10);
+          var sec = parseInt(match[2], 10);
+          var ms = match[3] ? parseInt(match[3].padEnd(3, '0').slice(0, 3), 10) : 0;
+          var totalSec = min * 60 + sec + ms / 1000;
+          list.push({ time: totalSec, text: textContent });
+        }
+      }
+      list.sort(function(a, b) { return a.time - b.time; });
+      lrcData = list;
+      if (!list.length) {
+        if (lrcStatus) lrcStatus.textContent = '🎵 纯享模式 · 聆听好音乐';
+        return;
+      }
+      renderLrcDom();
+    }
+
+    function renderLrcDom() {
+      if (!lyricsScroll) return;
+      var html = '';
+      for (var i = 0; i < lrcData.length; i++) {
+        html += '<div class="lyric-line' + (i === 0 ? ' active' : '') + '" id="lrc_' + i + '">' + escapeHtmlText(lrcData[i].text) + '</div>';
+      }
+      lyricsScroll.innerHTML = html;
+      curLrcIndex = 0;
+    }
+
+    function updateLyrics(cur) {
+      if (!lrcData.length || !lyricsScroll) return;
+      var idx = 0;
+      for (var i = 0; i < lrcData.length; i++) {
+        if (cur >= lrcData[i].time) {
+          idx = i;
+        } else {
+          break;
+        }
+      }
+      if (idx !== curLrcIndex) {
+        var prevEl = document.getElementById('lrc_' + curLrcIndex);
+        if (prevEl) prevEl.classList.remove('active');
+        var curEl = document.getElementById('lrc_' + idx);
+        if (curEl) curEl.classList.add('active');
+        curLrcIndex = idx;
+        var offset = (idx * 28) - 45;
+        lyricsScroll.style.transform = 'translateY(' + (-offset) + 'px)';
+      }
+    }
+
+    function escapeHtmlText(str) {
+      return String(str || '').replace(/[&<>'"]/g, function(c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[c];
+      });
+    }
+  </script>
+</body>
+</html>`;
 }
 
 server.listen(PORT, () => {
