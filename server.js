@@ -1020,18 +1020,19 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       if (!toast) {
         toast = document.createElement('div');
         toast.id = 'mcToast';
-        toast.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.88);color:#fff;padding:10px 22px;border-radius:24px;font-size:13px;z-index:99999;box-shadow:0 6px 20px rgba(0,0,0,0.3);transition:all 0.3s ease;opacity:0;pointer-events:none;max-width:90%;text-align:center;word-break:break-all;line-height:1.4;';
+        toast.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) scale(0.9);color:#fff;padding:14px 26px;border-radius:30px;font-size:14px;font-weight:500;z-index:99999;box-shadow:0 12px 36px rgba(0,0,0,0.35);transition:opacity 0.25s ease, transform 0.25s ease;opacity:0;pointer-events:none;max-width:90%;text-align:center;word-break:break-all;line-height:1.4;';
         document.body.appendChild(toast);
       }
-      toast.style.background = isError ? 'rgba(220,53,69,0.92)' : 'rgba(40,167,69,0.92)';
+      toast.style.background = isError ? 'rgba(220,53,69,0.95)' : 'rgba(40,167,69,0.95)';
       toast.textContent = message;
+      void toast.offsetWidth;
       toast.style.opacity = '1';
-      toast.style.top = '30px';
+      toast.style.transform = 'translate(-50%, -50%) scale(1)';
       clearTimeout(toast._timer);
       toast._timer = setTimeout(function() {
         toast.style.opacity = '0';
-        toast.style.top = '20px';
-      }, 3500);
+        toast.style.transform = 'translate(-50%, -50%) scale(0.9)';
+      }, 3000);
     }
 
     function shareSong(index, event) {
