@@ -1533,14 +1533,6 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       if (!input) return;
       var query = input.value.trim();
       if (!query) return;
-      var key = getSongKey();
-      if (key) {
-        try { localStorage.setItem('bear_manual_lyric_' + key, query); } catch (e) {}
-      }
-      var currentItem = (currentIndex >= 0 && playlistItems[currentIndex]) ? playlistItems[currentIndex] : null;
-      if (currentItem && currentItem.key) {
-        try { localStorage.setItem('bear_manual_lyric_' + currentItem.key, query); } catch (e) {}
-      }
       var row = document.getElementById('lyricSearchRow');
       if (row) row.style.display = 'none';
       var btn = document.getElementById('btnLyricSearch');
@@ -1666,22 +1658,10 @@ function getHTMLContent(startTime, visitorCount, startDate) {
 
     function fetchLyrics(title, force, manual) {
       if (!title) return;
-      var key = getSongKey();
       var currentItem = (currentIndex >= 0 && playlistItems[currentIndex]) ? playlistItems[currentIndex] : null;
       var itemKey = (currentItem && currentItem.key) || '';
       var itemUrl = (currentItem && currentItem.url) || '';
 
-      if (!force && key) {
-        var savedManual = '';
-        try { savedManual = localStorage.getItem('bear_manual_lyric_' + key); } catch (e) {}
-        if (!savedManual && itemKey) {
-          try { savedManual = localStorage.getItem('bear_manual_lyric_' + itemKey); } catch (e) {}
-        }
-        if (savedManual) {
-          title = savedManual;
-          manual = true;
-        }
-      }
       if (!force && title === lastLyricsTitle) return;
       lastLyricsTitle = title;
       lyricLines = [];
@@ -1746,11 +1726,13 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       }
       if (!confirm('确定清除「' + currentItem.name + '」的已缓存歌词吗？\\n清除后您可以点击「🔍 搜词」手动重新搜索。')) return;
 
-      var key = getSongKey();
-      if (key) {
-        try { localStorage.removeItem('bear_manual_lyric_' + key); } catch (e) {}
-      }
-      try { localStorage.removeItem('bear_manual_lyric_' + currentItem.key); } catch (e) {}
+      try {
+        for (var storageKey in localStorage) {
+          if (storageKey && storageKey.indexOf('bear_manual_lyric_') === 0) {
+            localStorage.removeItem(storageKey);
+          }
+        }
+      } catch (e) {}
 
       fetch('/lyrics-delete', {
         method: 'POST',
@@ -1789,6 +1771,14 @@ function getHTMLContent(startTime, visitorCount, startDate) {
 
 
     
+    try {
+      for (var storageKey in localStorage) {
+        if (storageKey && storageKey.indexOf('bear_manual_lyric_') === 0) {
+          localStorage.removeItem(storageKey);
+        }
+      }
+    } catch (e) {}
+
     switchPlayer('audio');
     loadCachedSongs();
     updateUptime();
@@ -3603,8 +3593,8 @@ async function handleLyrics(url, res) {
 
   const targetYtUrl = (songUrl && validateYouTubeUrl(songUrl)) ? songUrl : getYouTubeUrlByKey(key);
 
-  // 1. 如果非手动搜词，首先寻找本地已有的 ytb 字幕 (<key>.ytb.lrc)
-  if (!force && !manual && key) {
+  // 1. 默认第一优先级：只要本地存在 ytb 字幕，无论任何情况（除搜词框显式强制搜词 force=1 且 manual=1 外），必须优先返回 YouTube 原生字幕
+  if (!(force && manual) && key) {
     const localYtb = getLocalLrcInfo(key, 'ytb');
     if (localYtb) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -3618,9 +3608,9 @@ async function handleLyrics(url, res) {
     }
   }
 
-  // 2. 如果本地没有 ytb 字幕，且该歌曲来自 YouTube 且未被用户清词禁用、非手动搜词模式：
+  // 2. 如果本地没有 ytb 字幕，且该歌曲来自 YouTube 且未被用户清词禁用（除显式强制搜词外）：
   //    先去 ytb 下载字幕，下载成功保存为 <key>.ytb.lrc
-  if (!manual && targetYtUrl && !hasNoSubMarker(key)) {
+  if (!(force && manual) && targetYtUrl && !hasNoSubMarker(key)) {
     const ytKey = key || getYouTubeCacheKey(targetYtUrl, 'mp3');
     try {
       const ytLrc = await fetchYouTubeSubtitles(targetYtUrl, ytKey);
@@ -3641,7 +3631,7 @@ async function handleLyrics(url, res) {
 
   // 3. 如果 ytb 下载字幕失败，或非 YouTube 歌曲：
   //    检查本地是否已有国内平台之前下载的歌词缓存 (<key>.kugou.lrc, <key>.netease.lrc, <key>.lrclib.lrc)
-  if (!force && !manual && key) {
+  if (!(force && manual) && key) {
     const localOther = getLocalLrcInfo(key);
     if (localOther && localOther.source !== 'youtube-subtitles') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
