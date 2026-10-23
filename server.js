@@ -3484,7 +3484,7 @@ async function fetchYouTubeSubtitles(inputUrl, key) {
     '--skip-download',
     '--write-subs',
     '--write-auto-subs',
-    '--sub-langs', 'zh-Hans,zh-CN,zh,zh-Hant,zh-TW,zh-HK,en,all',
+    '--sub-langs', 'zh-Hans,zh-CN,zh,zh-Hant,zh-TW,zh-HK,en',
     '--sub-format', 'vtt/srt/best',
     '-o', `${tempPrefix}.%(ext)s`
   ];
@@ -3536,9 +3536,10 @@ async function fetchYouTubeSubtitles(inputUrl, key) {
   }
 
   if (lrcText && lrcText.trim()) {
-    saveLocalLrcContent(key, lrcText, inputUrl);
+    const formattedLrc = `[source:youtube-subtitles]\n${lrcText.trim()}`;
+    saveLocalLrcContent(key, formattedLrc, inputUrl);
     console.log(`[lyrics] Saved YouTube subtitle for ${key.slice(0, 10)} (${lrcText.split('\n').length} lines)`);
-    return lrcText;
+    return formattedLrc;
   }
 
   return null;
@@ -3551,23 +3552,25 @@ async function handleLyrics(url, res) {
   const force = url.searchParams.get('force') === '1';
   const manual = url.searchParams.get('manual') === '1';
 
-  // 1. 若非手动重新搜索，优先直接读取本地已有缓存歌词/字幕 (cache/<key>.lrc)
+  const targetYtUrl = (songUrl && validateYouTubeUrl(songUrl)) ? songUrl : getYouTubeUrlByKey(key);
+
+  // 1. 若非手动重新搜索，优先检查本地已有缓存歌词/字幕 (cache/<key>.lrc)
   if (!force && !manual && key) {
     const localLrc = getLocalLrcContent(key);
-    if (localLrc) {
+    // 如果本地已有确定是 YouTube 原生字幕，或者该歌曲不是 YouTube 视频、或者已被用户标记清词，直接返回本地缓存
+    if (localLrc && (localLrc.includes('[source:youtube-subtitles]') || !targetYtUrl || hasNoSubMarker(key))) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         lyrics: localLrc,
         synced: true,
         trackName: rawTitle,
-        source: 'local-cache'
+        source: localLrc.includes('[source:youtube-subtitles]') ? 'youtube-subtitles' : 'local-cache'
       }));
       return;
     }
   }
 
-  // 2. 若是 YouTube 视频，且未被用户清词、且非用户手动搜词模式，字幕优先级最高
-  const targetYtUrl = (songUrl && validateYouTubeUrl(songUrl)) ? songUrl : getYouTubeUrlByKey(key);
+  // 2. 若是 YouTube 视频，且未被用户清词禁用、且非用户手动搜词模式，字幕优先级最高
   if (!manual && targetYtUrl && !hasNoSubMarker(key)) {
     const ytKey = key || getYouTubeCacheKey(targetYtUrl, 'mp3');
     try {
@@ -3587,6 +3590,21 @@ async function handleLyrics(url, res) {
     }
   }
 
+  // 3. 若 YouTube 没有字幕，但本地已有旧缓存（如之前的国内平台歌词），回退使用本地缓存
+  if (!force && !manual && key) {
+    const localLrc = getLocalLrcContent(key);
+    if (localLrc) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        lyrics: localLrc,
+        synced: true,
+        trackName: rawTitle,
+        source: 'local-cache'
+      }));
+      return;
+    }
+  }
+
   // 3. 国内平台歌词检索（酷狗 -> 网易云 -> lrclib）
   //    用于：无字幕时的自动兜底；或用户点击「🔍 搜词」时直接在国内平台重新找
   if (!rawTitle) {
@@ -3595,6 +3613,13 @@ async function handleLyrics(url, res) {
     return;
   }
   const cleanTitle = cleanSongTitle(rawTitle) || rawTitle;
+
+  // 避免使用占位符“缓存歌曲 xxxxxxxx”或链接去国内平台盲搜乱匹配出错误歌词
+  if (!cleanTitle || cleanTitle.startsWith('缓存歌曲') || /^https?:\/\//i.test(cleanTitle)) {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ lyrics: null }));
+    return;
+  }
 
   // 1. 优先使用酷狗音乐（国内曲库全、云服务器绝不封禁、免鉴权）
   let result = await searchKugouLyrics(cleanTitle, rawTitle);
