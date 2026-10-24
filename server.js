@@ -3466,7 +3466,15 @@ function getLocalLrcInfo(key, preferredSource = null) {
   if (key.length < 64) {
     const metadata = readCacheMetadata();
     const matched = Object.keys(metadata).find(k => k.startsWith(key));
-    if (matched) fullKey = matched;
+    if (matched) {
+      fullKey = matched;
+    } else {
+      try {
+        const files = fs.readdirSync(CACHE_DIR);
+        const f = files.find(x => x.startsWith(key) && /\.(mp3|wav|m4a|aac|ogg|flac|mp4|webm|mov)$/i.test(x));
+        if (f) fullKey = f.replace(/\.[^.]+$/, '');
+      } catch {}
+    }
   }
 
   // 1. 如果指定了首选来源（例如 'ytb'）
@@ -3477,6 +3485,18 @@ function getLocalLrcInfo(key, preferredSource = null) {
         const c = fs.readFileSync(p, 'utf8').trim();
         if (c) return { lyrics: c, source: preferredSource === 'ytb' ? 'youtube-subtitles' : preferredSource };
       } catch {}
+    }
+    // 兼容检查旧版单个 .lrc 文件如果是 ytb 来源
+    if (preferredSource === 'ytb') {
+      const legacyPath = path.join(CACHE_DIR, `${fullKey}.lrc`);
+      if (fs.existsSync(legacyPath)) {
+        try {
+          const c = fs.readFileSync(legacyPath, 'utf8').trim();
+          if (c && c.includes('[source:youtube-subtitles]')) {
+            return { lyrics: c, source: 'youtube-subtitles' };
+          }
+        } catch {}
+      }
     }
     return null;
   }
@@ -3713,7 +3733,7 @@ async function handleLyrics(url, res) {
   //    检查本地是否已有国内平台之前下载的歌词缓存 (<key>.kugou.lrc, <key>.netease.lrc, <key>.lrclib.lrc)
   if (!(force && manual) && key) {
     const localOther = getLocalLrcInfo(key);
-    if (localOther && localOther.source !== 'youtube-subtitles') {
+    if (localOther) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         lyrics: localOther.lyrics,
@@ -4240,34 +4260,45 @@ function renderSharePlayerHTML(song, shortKey, t, s) {
       margin-bottom: 12px;
     }
     .lyrics-container {
-      height: 130px;
-      overflow-y: hidden;
+      height: 160px;
+      overflow: hidden;
       position: relative;
       margin: 12px 0 16px;
-      mask-image: linear-gradient(transparent, black 25%, black 75%, transparent);
-      -webkit-mask-image: linear-gradient(transparent, black 25%, black 75%, transparent);
+      mask-image: linear-gradient(to bottom, transparent 0%, black 18%, black 82%, transparent 100%);
+      -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 18%, black 82%, transparent 100%);
     }
     .lyrics-scroll {
-      transition: transform 0.35s cubic-bezier(0.25, 0.1, 0.25, 1);
-      padding: 40px 0;
+      position: relative;
+      transition: transform 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+      padding: 65px 0;
+      text-align: center;
     }
     .lyric-line {
-      font-size: 13px;
-      line-height: 28px;
-      height: 28px;
-      color: rgba(255, 255, 255, 0.45);
-      transition: color 0.3s, font-size 0.3s, transform 0.3s;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      padding: 0 10px;
+      font-size: 13.5px;
+      line-height: 1.6;
+      padding: 5px 12px;
+      min-height: 28px;
+      color: rgba(255, 255, 255, 0.35);
+      transition: color 0.3s ease, font-size 0.3s ease, transform 0.3s ease;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+      border-radius: 6px;
+      word-break: break-word;
+    }
+    .lyric-line:hover {
+      color: rgba(255, 255, 255, 0.85);
+      background: rgba(255, 255, 255, 0.05);
+    }
+    .lyric-line.near {
+      color: rgba(255, 255, 255, 0.65);
     }
     .lyric-line.active {
       color: #a3bffa;
-      font-size: 15px;
-      font-weight: 600;
-      transform: scale(1.05);
-      text-shadow: 0 0 14px rgba(102, 126, 234, 0.8);
+      font-size: 15.5px;
+      font-weight: 700;
+      transform: scale(1.03);
+      text-shadow: 0 0 16px rgba(102, 126, 234, 0.85);
     }
     .progress-section {
       margin-top: 10px;
@@ -4474,6 +4505,7 @@ function renderSharePlayerHTML(song, shortKey, t, s) {
     function skipTime(delta) {
       if (!player) return;
       player.currentTime = Math.max(0, Math.min(player.duration || 0, player.currentTime + delta));
+      updateLyrics(player.currentTime, true);
     }
 
     function toggleMute() {
@@ -4489,7 +4521,17 @@ function renderSharePlayerHTML(song, shortKey, t, s) {
       if (!player || !player.duration || !progressBg) return;
       var rect = progressBg.getBoundingClientRect();
       var ratio = (e.clientX - rect.left) / rect.width;
-      player.currentTime = Math.max(0, Math.min(player.duration, ratio * player.duration));
+      player.currentTime = Math.max(0, Math.min(player.duration, Math.max(0, ratio * player.duration)));
+      updateLyrics(player.currentTime, true);
+    }
+
+    function jumpToLyric(time) {
+      if (!player || isNaN(time)) return;
+      player.currentTime = Math.max(0, time);
+      if (player.paused) {
+        player.play().catch(function() {});
+      }
+      updateLyrics(time, true);
     }
 
     if (player) {
@@ -4518,8 +4560,20 @@ function renderSharePlayerHTML(song, shortKey, t, s) {
         }
       });
 
+      player.addEventListener('seeking', function() {
+        if (!isVideo && player) updateLyrics(player.currentTime || 0, true);
+      });
+
+      player.addEventListener('seeked', function() {
+        if (!isVideo && player) updateLyrics(player.currentTime || 0, true);
+      });
+
       player.addEventListener('loadedmetadata', function() {
         if (durTime) durTime.textContent = formatTime(player.duration);
+      });
+
+      window.addEventListener('resize', function() {
+        if (!isVideo && player) updateLyrics(player.currentTime || 0, true);
       });
 
       var playPromise = player.play();
@@ -4538,7 +4592,8 @@ function renderSharePlayerHTML(song, shortKey, t, s) {
     }
 
     if (!isVideo) {
-      fetch('${lyricsUrl}')
+      var lyricsUrl = ${JSON.stringify(lyricsUrl)};
+      fetch(lyricsUrl)
         .then(function(res) { return res.json(); })
         .then(function(data) {
           if (!data || !data.lyrics) {
@@ -4547,34 +4602,54 @@ function renderSharePlayerHTML(song, shortKey, t, s) {
           }
           parseLrc(data.lyrics);
         })
-        .catch(function() {
+        .catch(function(err) {
+          console.warn('获取歌词失败:', err);
           if (lrcStatus) lrcStatus.textContent = '🎵 纯音乐 / 暂未匹配到歌词';
         });
     }
 
     function parseLrc(text) {
+      if (!text || typeof text !== 'string') {
+        if (lrcStatus) lrcStatus.textContent = '🎵 纯享模式 · 聆听好音乐';
+        return;
+      }
       var lines = text.split('\\n');
       var list = [];
-      var timeRegex = /\\[(\\d{2}):(\\d{2})(?:\\.(\\d{1,3}))?\\]/g;
+      var timeRe = /\\[(\\d{1,3}):(\\d{2})(?:[.:](\\d{1,3}))?\\]/g;
+      var offsetMatch = text.match(/\\[offset:\\s*([+-]?\\d+)\\]/i);
+      var lrcOffset = offsetMatch ? parseInt(offsetMatch[1], 10) / 1000 : 0;
+      if (Math.abs(lrcOffset) > 30) lrcOffset = 0;
+
       for (var i = 0; i < lines.length; i++) {
-        var line = lines[i].trim();
-        var match;
-        timeRegex.lastIndex = 0;
-        var textContent = line.replace(timeRegex, '').trim();
-        if (!textContent) continue;
-        timeRegex.lastIndex = 0;
-        while ((match = timeRegex.exec(line)) !== null) {
-          var min = parseInt(match[1], 10);
-          var sec = parseInt(match[2], 10);
-          var ms = match[3] ? parseInt(match[3].padEnd(3, '0').slice(0, 3), 10) : 0;
-          var totalSec = min * 60 + sec + ms / 1000;
-          list.push({ time: totalSec, text: textContent });
+        var line = lines[i];
+        if (/^\\[[a-z]+:.*\\]$/i.test(line.trim())) continue;
+        var times = [];
+        var m;
+        timeRe.lastIndex = 0;
+        while ((m = timeRe.exec(line)) !== null) {
+          var ms = 0;
+          if (m[3]) {
+            var msLen = m[3].length;
+            ms = msLen === 1 ? parseInt(m[3], 10) * 100 : (msLen === 2 ? parseInt(m[3], 10) * 10 : parseInt(m[3], 10));
+          }
+          times.push(parseInt(m[1], 10) * 60 + parseInt(m[2], 10) + ms / 1000 - lrcOffset);
+        }
+        var t = line.replace(/\\[\\d{1,3}:\\d{2}(?:[.:]\\d{1,3})?\\]/g, '').trim();
+        if (t && times.length) {
+          for (var j = 0; j < times.length; j++) {
+            list.push({ time: Math.max(0, times[j]), text: t });
+          }
         }
       }
       list.sort(function(a, b) { return a.time - b.time; });
       lrcData = list;
       if (!list.length) {
-        if (lrcStatus) lrcStatus.textContent = '🎵 纯享模式 · 聆听好音乐';
+        var cleanPlainText = text.replace(/\\[[^\\]]*\\]/g, '').trim();
+        if (cleanPlainText && lyricsScroll) {
+          lyricsScroll.innerHTML = '<div style="padding:10px;font-size:13px;color:rgba(255,255,255,0.6);text-align:center;white-space:pre-line;line-height:1.8;">' + escapeHtmlText(cleanPlainText.substring(0, 1500)) + '</div>';
+        } else if (lrcStatus) {
+          lrcStatus.textContent = '🎵 纯享模式 · 聆听好音乐';
+        }
         return;
       }
       renderLrcDom();
@@ -4584,15 +4659,16 @@ function renderSharePlayerHTML(song, shortKey, t, s) {
       if (!lyricsScroll) return;
       var html = '';
       for (var i = 0; i < lrcData.length; i++) {
-        html += '<div class="lyric-line' + (i === 0 ? ' active' : '') + '" id="lrc_' + i + '">' + escapeHtmlText(lrcData[i].text) + '</div>';
+        html += '<div class="lyric-line" id="lrc_' + i + '" onclick="jumpToLyric(' + lrcData[i].time + ')" title="点击跳转播放">' + escapeHtmlText(lrcData[i].text) + '</div>';
       }
       lyricsScroll.innerHTML = html;
-      curLrcIndex = 0;
+      curLrcIndex = -1;
+      updateLyrics(player ? (player.currentTime || 0) : 0, true);
     }
 
-    function updateLyrics(cur) {
-      if (!lrcData.length || !lyricsScroll) return;
-      var idx = 0;
+    function updateLyrics(cur, force) {
+      if (!lrcData || !lrcData.length || !lyricsScroll) return;
+      var idx = -1;
       for (var i = 0; i < lrcData.length; i++) {
         if (cur >= lrcData[i].time) {
           idx = i;
@@ -4600,14 +4676,28 @@ function renderSharePlayerHTML(song, shortKey, t, s) {
           break;
         }
       }
-      if (idx !== curLrcIndex) {
-        var prevEl = document.getElementById('lrc_' + curLrcIndex);
-        if (prevEl) prevEl.classList.remove('active');
-        var curEl = document.getElementById('lrc_' + idx);
-        if (curEl) curEl.classList.add('active');
-        curLrcIndex = idx;
-        var offset = (idx * 28) - 45;
-        lyricsScroll.style.transform = 'translateY(' + (-offset) + 'px)';
+      if (!force && idx === curLrcIndex) return;
+      curLrcIndex = idx;
+      var lines = lyricsScroll.children;
+      for (var j = 0; j < lines.length; j++) {
+        lines[j].classList.remove('active', 'near');
+        if (j === idx) {
+          lines[j].classList.add('active');
+        } else if (idx >= 0 && Math.abs(j - idx) <= 1) {
+          lines[j].classList.add('near');
+        }
+      }
+      if (idx >= 0) {
+        var activeLine = document.getElementById('lrc_' + idx);
+        if (activeLine) {
+          var container = lyricsScroll.parentElement;
+          var boxH = container ? container.clientHeight : 160;
+          var centerOffset = (boxH - activeLine.offsetHeight) / 2;
+          var offset = activeLine.offsetTop - centerOffset;
+          lyricsScroll.style.transform = 'translateY(-' + Math.max(0, offset) + 'px)';
+        }
+      } else {
+        lyricsScroll.style.transform = 'translateY(0px)';
       }
     }
 
