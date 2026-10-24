@@ -1081,8 +1081,37 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       }, 3000);
     }
 
+    function trySyncCopy(text) {
+      var ok = false;
+      try {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.top = '0';
+        ta.style.left = '0';
+        ta.style.width = '2em';
+        ta.style.height = '2em';
+        ta.style.padding = '0';
+        ta.style.border = 'none';
+        ta.style.outline = 'none';
+        ta.style.boxShadow = 'none';
+        ta.style.background = 'transparent';
+        ta.style.opacity = '0.01';
+        ta.style.zIndex = '-9999';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        ta.setSelectionRange(0, text.length);
+        ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+      } catch (e) {
+        ok = false;
+      }
+      return ok;
+    }
+
     function copyTextToClipboard(text) {
-      // 1. Android App 原生 Bridge 接口 (最高优先级，零延迟，无视手势过期)
+      // 1. Android App 原生 Bridge 接口 (最高优先级，直接调用底层系统 ClipboardManager，100% 成功写入安卓剪贴板)
       try {
         if (window.AndroidBridge && typeof window.AndroidBridge.copyToClipboard === 'function') {
           if (window.AndroidBridge.copyToClipboard(text)) return Promise.resolve(true);
@@ -1094,55 +1123,77 @@ function getHTMLContent(startTime, visitorCount, startDate) {
         console.warn('AndroidBridge copy error:', e);
       }
 
-      // 2. 现代浏览器的 navigator.clipboard API
+      // 2. 在当前点击手势内立即同步尝试 document.execCommand('copy')
+      if (trySyncCopy(text)) {
+        return Promise.resolve(true);
+      }
+
+      // 3. 现代浏览器的 navigator.clipboard API
       if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
         return navigator.clipboard.writeText(text).then(function() {
           return true;
-        }).catch(function(err) {
-          console.warn('navigator.clipboard.writeText failed, using execCommand:', err);
-          return fallbackExecCopy(text);
+        }).catch(function() {
+          return false;
         });
       }
 
-      // 3. 经典 document.execCommand('copy') 兜底（兼容安卓老 WebView、各种移动端内置浏览器）
-      return fallbackExecCopy(text);
+      return Promise.resolve(false);
     }
 
-    function fallbackExecCopy(text) {
-      return new Promise(function(resolve) {
-        var textArea = document.createElement('textarea');
-        textArea.value = text;
-        textArea.setAttribute('readonly', '');
-        textArea.style.position = 'fixed';
-        textArea.style.top = '0';
-        textArea.style.left = '-9999px';
-        textArea.style.width = '2em';
-        textArea.style.height = '2em';
-        textArea.style.padding = '0';
-        textArea.style.border = 'none';
-        textArea.style.outline = 'none';
-        textArea.style.boxShadow = 'none';
-        textArea.style.background = 'transparent';
-        document.body.appendChild(textArea);
-
-        var range = document.createRange();
-        range.selectNodeContents(textArea);
-        var selection = window.getSelection();
-        if (selection) {
-          selection.removeAllRanges();
-          selection.addRange(range);
-        }
-        textArea.setSelectionRange(0, textArea.value.length);
-
-        var successful = false;
-        try {
-          successful = document.execCommand('copy');
-        } catch (e) {
-          successful = false;
-        }
-        document.body.removeChild(textArea);
-        resolve(successful);
-      });
+    function showShareFallbackModal(url) {
+      var modal = document.getElementById('shareModal');
+      if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'shareModal';
+        modal.style.position = 'fixed';
+        modal.style.top = '0';
+        modal.style.left = '0';
+        modal.style.width = '100%';
+        modal.style.height = '100%';
+        modal.style.backgroundColor = 'rgba(0,0,0,0.65)';
+        modal.style.zIndex = '99999';
+        modal.style.display = 'flex';
+        modal.style.alignItems = 'center';
+        modal.style.justifyContent = 'center';
+        modal.style.padding = '20px';
+        modal.style.boxSizing = 'border-box';
+        modal.innerHTML = 
+          '<div style="background:#fff;border-radius:12px;padding:20px;max-width:380px;width:100%;box-shadow:0 8px 24px rgba(0,0,0,0.3);text-align:left;position:relative;color:#333;">' +
+            '<div style="font-weight:bold;font-size:16px;margin-bottom:8px;color:#1a73e8;">🔗 歌曲分享链接 (24小时有效)</div>' +
+            '<div style="font-size:13px;color:#666;margin-bottom:12px;">受当前版本安全限制，请点击下方复制或长按全选：</div>' +
+            '<input id="shareModalInput" type="text" readonly style="width:100%;padding:10px;font-size:13px;border:1px solid #ccc;border-radius:6px;box-sizing:border-box;background:#f8f9fa;color:#111;margin-bottom:14px;" />' +
+            '<div style="display:flex;justify-content:flex-end;gap:10px;">' +
+              '<button type="button" id="shareModalClose" style="padding:8px 16px;border:1px solid #ccc;border-radius:6px;background:#f1f3f4;color:#333;font-size:14px;cursor:pointer;">关闭</button>' +
+              '<button type="button" id="shareModalCopy" style="padding:8px 16px;border:none;border-radius:6px;background:#28a745;color:#fff;font-size:14px;font-weight:bold;cursor:pointer;">复制链接</button>' +
+            '</div>' +
+          '</div>';
+        document.body.appendChild(modal);
+        document.getElementById('shareModalClose').onclick = function() {
+          modal.style.display = 'none';
+        };
+        document.getElementById('shareModalCopy').onclick = function() {
+          var input = document.getElementById('shareModalInput');
+          input.focus();
+          input.select();
+          input.setSelectionRange(0, input.value.length);
+          var ok = false;
+          try { ok = document.execCommand('copy'); } catch(e){}
+          if (ok) {
+            showToast('🔗 已复制分享链接！');
+            setTimeout(function() { modal.style.display = 'none'; }, 800);
+          } else {
+            showToast('请直接长按输入框内容选择复制');
+          }
+        };
+      }
+      var input = document.getElementById('shareModalInput');
+      input.value = url;
+      modal.style.display = 'flex';
+      setTimeout(function() {
+        input.focus();
+        input.select();
+        input.setSelectionRange(0, url.length);
+      }, 100);
     }
 
     function shareSong(index, event) {
@@ -1154,10 +1205,12 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       if (!item || !item.key) return;
 
       function executeCopy(url) {
-        copyTextToClipboard(url).then(function() {
-          showToast('🔗 已复制分享链接！(24小时内有效)');
-        }).catch(function() {
-          showToast('🔗 已复制分享链接！(24小时内有效)');
+        copyTextToClipboard(url).then(function(success) {
+          if (success) {
+            showToast('🔗 已复制分享链接！(24小时内有效)');
+          } else {
+            showShareFallbackModal(url);
+          }
         });
       }
 

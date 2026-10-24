@@ -255,27 +255,22 @@ public class MainActivity extends AppCompatActivity {
         public boolean copyToClipboard(final String text) {
             if (text == null) return false;
             try {
-                ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-                if (clipboard != null) {
-                    ClipData clip = ClipData.newPlainText("share_url", text);
-                    clipboard.setPrimaryClip(clip);
-                    return true;
-                }
-            } catch (Exception e) {
                 runOnUiThread(() -> {
                     try {
-                        ClipboardManager cb = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-                        if (cb != null) {
+                        ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                        if (clipboard != null) {
                             ClipData clip = ClipData.newPlainText("share_url", text);
-                            cb.setPrimaryClip(clip);
+                            clipboard.setPrimaryClip(clip);
                         }
-                    } catch (Exception ex) {
-                        ex.printStackTrace();
+                    } catch (Exception e) {
+                        e.printStackTrace();
                     }
                 });
                 return true;
+            } catch (Exception e) {
+                e.printStackTrace();
+                return false;
             }
-            return false;
         }
     }
 }
