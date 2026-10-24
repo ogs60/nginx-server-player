@@ -815,6 +815,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
             <span id="offsetDisplay" style="color:#667eea;font-weight:bold;min-width:32px;text-align:center;">0.0s</span>
             <button type="button" class="lyric-btn" onclick="adjustLyricOffset(0.5)" title="歌词快了，延后0.5秒">+0.5s 快了</button>
             <button type="button" class="lyric-btn" onclick="resetLyricOffset()" title="重置时间偏移">重置</button>
+            <button type="button" class="lyric-btn" onclick="manualAppendRepeatLyrics()" title="音频唱了2遍但歌词只有1遍？点击自动复制追加第2遍歌词" style="color:#d97706;border-color:#fde68a;">🔁 追加第2遍</button>
             <button type="button" class="lyric-btn" id="btnSaveOffset" onclick="saveLyricOffsetPermanent()" title="将校准时间永久保存到服务器，下次播放无需重新校准" style="color:#15803d;border-color:#86efac;font-weight:bold;background:#f0fdf4;opacity:0.6;">💾 保存</button>
           </div>
           <div id="lyricSearchRow" style="display:none;align-items:center;gap:6px;margin-bottom:8px;">
@@ -1621,6 +1622,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
     var currentRawLyrics = null;
     var userLyricOffsets = {};
     try { userLyricOffsets = JSON.parse(localStorage.getItem('bear_lyric_offsets') || '{}'); } catch (e) {}
+    var hasAutoAppendedRepeat = false;
 
     function getSongKey() {
       if (currentIndex >= 0 && playlistItems[currentIndex]) {
@@ -1804,6 +1806,105 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       });
     }
 
+    function checkAndAutoAppendRepeatLyrics() {
+      if (!currentPlayer || !currentPlayer.duration || !lyricLines.length || !currentRawLyrics) return;
+      if (hasAutoAppendedRepeat) return;
+      var duration = currentPlayer.duration;
+      if (duration < 60 || lyricLines.length < 5) return;
+
+      var lastTime = lyricLines[lyricLines.length - 1].time;
+      if (lastTime > duration - 45) return;
+
+      var ratio = duration / lastTime;
+      var repeatTimes = 0;
+      if (ratio >= 1.65 && ratio <= 2.45) {
+        repeatTimes = 2;
+      } else if (ratio >= 2.65 && ratio <= 3.45) {
+        repeatTimes = 3;
+      }
+
+      if (repeatTimes >= 2) {
+        appendRepeatLyrics(repeatTimes, true);
+      }
+    }
+
+    function appendRepeatLyrics(repeatTimes, isAuto) {
+      if (!currentRawLyrics || !lyricLines.length) return;
+      var duration = (currentPlayer && currentPlayer.duration) || 0;
+      var lastTime = lyricLines[lyricLines.length - 1].time;
+      var cycle = duration > 0 ? (duration / repeatTimes) : (lastTime + 15);
+
+      var appendedLrc = '';
+      for (var r = 1; r < repeatTimes; r++) {
+        var shifted = shiftLrcTimestamps(currentRawLyrics, cycle * r);
+        if (shifted) appendedLrc += '\\n' + shifted;
+      }
+
+      if (!appendedLrc) return;
+      var combined = currentRawLyrics + appendedLrc;
+      currentRawLyrics = combined;
+      lyricLines = parseLrc(combined);
+      renderLyricLines(lyricLines);
+      hasAutoAppendedRepeat = true;
+
+      var meta = document.getElementById('lyricsMeta');
+      if (meta && meta.textContent) {
+        meta.textContent = meta.textContent.replace(/\\s*\\[.*?自动补全.*?\\]/g, '') + ' [🔁 自动补全第2遍]';
+      }
+
+      var saveBtn = document.getElementById('btnSaveOffset');
+      if (saveBtn) {
+        saveBtn.style.opacity = '1';
+        saveBtn.style.borderColor = '#16a34a';
+      }
+
+      if (currentPlayer) updateLyricSync(currentPlayer.currentTime);
+      showToast(isAuto ? '🔁 检测到连唱音频，已自动为您补全第二遍歌词！' : '🔁 已成功追加下一遍歌词！点击「💾 保存」可永久生效');
+    }
+
+    function manualAppendRepeatLyrics() {
+      if (!currentRawLyrics || !lyricLines.length) {
+        showToast('当前无可用歌词可追加', true);
+        return;
+      }
+      var duration = (currentPlayer && currentPlayer.duration) || 0;
+      var lastTime = lyricLines[lyricLines.length - 1].time;
+      var cycle = 0;
+      if (currentPlayer && currentPlayer.currentTime > 30 && currentPlayer.currentTime > lastTime - 10) {
+        cycle = Math.round((currentPlayer.currentTime - lyricLines[0].time) * 10) / 10;
+      } else if (duration > 0 && duration > lastTime * 1.5) {
+        cycle = Math.round((duration / 2) * 10) / 10;
+      } else {
+        cycle = Math.round((lastTime + 15) * 10) / 10;
+      }
+
+      var shifted = shiftLrcTimestamps(currentRawLyrics, cycle);
+      if (!shifted) {
+        showToast('生成下一遍歌词失败', true);
+        return;
+      }
+
+      var combined = currentRawLyrics + '\\n' + shifted;
+      currentRawLyrics = combined;
+      lyricLines = parseLrc(combined);
+      renderLyricLines(lyricLines);
+      hasAutoAppendedRepeat = true;
+
+      var meta = document.getElementById('lyricsMeta');
+      if (meta && meta.textContent) {
+        meta.textContent = meta.textContent.replace(/\\s*\\[.*?已追加.*?\\]/g, '') + ' [🔁 已追加第2遍]';
+      }
+
+      var saveBtn = document.getElementById('btnSaveOffset');
+      if (saveBtn) {
+        saveBtn.style.opacity = '1';
+        saveBtn.style.borderColor = '#16a34a';
+      }
+
+      if (currentPlayer) updateLyricSync(currentPlayer.currentTime);
+      showToast('🔁 已成功追加第2遍歌词！点击「💾 保存」即可永久存储');
+    }
+
     function toggleOffsetControls() {
       var row = document.getElementById('offsetControlsRow');
       var btn = document.getElementById('btnOffsetToggle');
@@ -1911,6 +2012,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
 
     function updateLyricSync(currentTime) {
       if (!lyricLines.length) return;
+      if (!hasAutoAppendedRepeat && currentTime > 3) checkAndAutoAppendRepeatLyrics();
       var adjustedTime = currentTime - getCurrentSongOffset();
       var idx = -1;
       for (var i = 0; i < lyricLines.length; i++) {
@@ -1938,6 +2040,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
     }
 
     function clearLyrics() {
+      hasAutoAppendedRepeat = false;
       lastLyricsTitle = '';
       lyricLines = [];
       currentLyricIdx = -1;
@@ -1963,6 +2066,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
 
     function fetchLyrics(title, force, manual) {
       if (!title) return;
+      hasAutoAppendedRepeat = false;
       var currentItem = (currentIndex >= 0 && playlistItems[currentIndex]) ? playlistItems[currentIndex] : null;
       var itemKey = (currentItem && currentItem.key) || '';
       var itemUrl = (currentItem && currentItem.url) || '';
@@ -1999,6 +2103,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
             currentRawLyrics = data.lyrics;
             lyricLines = parseLrc(data.lyrics);
             renderLyricLines(lyricLines);
+            checkAndAutoAppendRepeatLyrics();
             var sourceNames = {
               'preferred': '⭐ 优选歌词',
               'youtube-subtitles': 'YouTube字幕',
@@ -2169,6 +2274,8 @@ function getHTMLContent(startTime, visitorCount, startDate) {
 
     audioPlayer.addEventListener('timeupdate', function() { updateLyricSync(audioPlayer.currentTime); });
     videoPlayer.addEventListener('timeupdate', function() { updateLyricSync(videoPlayer.currentTime); });
+    audioPlayer.addEventListener('loadedmetadata', function() { checkAndAutoAppendRepeatLyrics(); });
+    videoPlayer.addEventListener('loadedmetadata', function() { checkAndAutoAppendRepeatLyrics(); });
 
     audioPlayer.addEventListener('ended', playNext);
     videoPlayer.addEventListener('ended', playNext);
