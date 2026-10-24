@@ -2101,29 +2101,97 @@ function getManageHTMLContent() {
       background: #f0f4ff;
       border-color: #667eea;
     }
-    .order-badge {
-      font-size: 12px;
-      font-weight: bold;
-      color: #718096;
-      min-width: 28px;
-      text-align: center;
-    }
-    .order-btns {
+    .order-box {
       display: flex;
-      flex-direction: column;
+      align-items: center;
+      gap: 5px;
+      flex-shrink: 0;
+    }
+    .order-input {
+      width: 44px;
+      height: 28px;
+      padding: 0 4px;
+      text-align: center;
+      font-size: 13px;
+      font-weight: 700;
+      color: #2d3748;
+      border: 1.5px solid #cbd5e0;
+      border-radius: 6px;
+      background: #fff;
+      outline: none;
+      transition: all 0.2s;
+      -moz-appearance: textfield;
+    }
+    .order-input::-webkit-outer-spin-button,
+    .order-input::-webkit-inner-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+    .order-input:focus {
+      border-color: #667eea;
+      background: #f0f4ff;
+      color: #5a67d8;
+      box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.25);
+    }
+    .order-btns-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
       gap: 2px;
     }
     .order-btn {
-      background: none;
+      background: #edf2f7;
       border: 1px solid #cbd5e0;
       border-radius: 3px;
       font-size: 9px;
-      padding: 1px 4px;
+      width: 20px;
+      height: 13px;
+      line-height: 11px;
       cursor: pointer;
       color: #4a5568;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      transition: all 0.15s;
     }
-    .order-btn:hover {
-      background: #e2e8f0;
+    .order-btn:hover:not(:disabled) {
+      background: #667eea;
+      color: #fff;
+      border-color: #667eea;
+    }
+    .order-btn:disabled {
+      opacity: 0.3;
+      cursor: not-allowed;
+    }
+    .song-card.order-highlight {
+      animation: highlightPulse 1.8s ease;
+    }
+    @keyframes highlightPulse {
+      0% { background: #eef2ff; border-color: #667eea; box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.35); }
+      100% { background: #f7fafc; border-color: #e2e8f0; }
+    }
+    #mcToast {
+      position: fixed;
+      top: 24px;
+      left: 50%;
+      transform: translateX(-50%) translateY(-10px);
+      background: rgba(45, 55, 72, 0.95);
+      color: #fff;
+      padding: 10px 20px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 500;
+      z-index: 99999;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.25);
+      transition: all 0.25s ease;
+      opacity: 0;
+      pointer-events: none;
+      max-width: 90%;
+      text-align: center;
+    }
+    #mcToast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
     }
     .song-info {
       flex: 1;
@@ -2258,7 +2326,8 @@ function getManageHTMLContent() {
     </div>
 
     <div class="tips-box">
-      💡 <strong>歌词匹配推荐格式</strong>：推荐将歌曲标题修改为「<strong>歌名 歌手</strong>」（例如：<code>相思 毛阿敏</code> 或 <code>情没有对错 鱼蛋</code>），播放器将自动以最高精准度全网检索匹配同步滚动歌词。点击右侧的「✏️ 编辑」按钮即可直接修改并保存到服务器。
+      💡 <strong>播放次序调整</strong>：支持<strong>直接输入数字序号</strong>（按回车或点击外部即刻生效）、<strong>🔝置顶 / 🔚置底</strong>、<strong>▲ / ▼ 上下微调</strong>，还支持勾选多首后点击「🔢 批量调整次序」一键整体移动。<br>
+      💡 <strong>歌词匹配推荐格式</strong>：推荐将歌曲标题修改为「<strong>歌名 歌手</strong>」（例如：<code>相思 毛阿敏</code> 或 <code>情没有对错 鱼蛋</code>），点击右侧「✏️ 编辑」按钮即可修改。
     </div>
 
     <div class="toolbar">
@@ -2266,6 +2335,7 @@ function getManageHTMLContent() {
       <button type="button" class="btn btn-primary" onclick="document.getElementById('mcFileInput').click()">📁 本地上传</button>
       <input type="file" id="mcFileInput" style="display:none;" accept="audio/*,video/*" multiple onchange="mcUploadFiles(event)">
       <button type="button" class="btn btn-secondary" onclick="toggleSelectAll()">全选 / 反选</button>
+      <button type="button" id="batchMoveBtn" class="btn btn-secondary" onclick="moveBatchToOrder()" disabled>🔢 批量调整次序 (<span id="batchMoveCount">0</span>)</button>
       <button type="button" id="batchDelBtn" class="btn btn-danger" onclick="deleteBatch()" disabled>🗑️ 批量删除 (<span id="selectedCount">0</span>)</button>
       <button type="button" class="btn btn-secondary" onclick="loadSongs()">🔄 刷新列表</button>
     </div>
@@ -2359,6 +2429,11 @@ function getManageHTMLContent() {
         const isEditing = (editingKey === song.key);
         const isSelected = selectedSet.has(song.file);
         const isPlaying = (currentPreviewFile === song.file);
+        const realIndex = songsData.findIndex(s => s.key === song.key);
+        const realOrder = realIndex >= 0 ? realIndex + 1 : idx + 1;
+        const isFirst = (realIndex === 0);
+        const isLast = (realIndex === songsData.length - 1);
+        const isHighlighted = (highlightKey && song.key === highlightKey);
 
         let titleContent = '';
         if (isEditing) {
@@ -2374,12 +2449,16 @@ function getManageHTMLContent() {
             (song.size ? '<span class="tag">' + formatSize(song.size) + '</span>' : '');
         }
 
-        return '<div class="song-card ' + (isPlaying ? 'playing' : '') + '" id="card_' + song.key + '">' +
+        return '<div class="song-card ' + (isPlaying ? 'playing' : '') + ' ' + (isHighlighted ? 'order-highlight' : '') + '" id="card_' + song.key + '">' +
           '<input type="checkbox" onchange="toggleSelect(\\'' + song.file + '\\', this.checked)" ' + (isSelected ? 'checked' : '') + ' style="width: 16px; height: 16px; cursor: pointer;">' +
-          '<div class="order-badge">' + (idx + 1) + '</div>' +
-          '<div class="order-btns">' +
-            '<button type="button" class="order-btn" title="上移" onclick="moveSong(' + idx + ', -1)" ' + (idx === 0 ? 'disabled' : '') + '>▲</button>' +
-            '<button type="button" class="order-btn" title="下移" onclick="moveSong(' + idx + ', 1)" ' + (idx === filtered.length - 1 ? 'disabled' : '') + '>▼</button>' +
+          '<div class="order-box">' +
+            '<input type="number" class="order-input" id="orderInput_' + song.key + '" value="' + realOrder + '" min="1" max="' + songsData.length + '" title="直接输入数字序号，回车或失焦即刻调整" onfocus="this.select()" onchange="jumpSongOrder(\\'' + song.key + '\\', this.value)" onkeydown="if(event.key===\\'Enter\\'){this.blur();}">' +
+            '<div class="order-btns-grid">' +
+              '<button type="button" class="order-btn" title="一键置顶 (第1位)" onclick="jumpSongOrder(\\'' + song.key + '\\', 1)" ' + (isFirst ? 'disabled' : '') + '>🔝</button>' +
+              '<button type="button" class="order-btn" title="上移一位" onclick="moveSong(\\'' + song.key + '\\', -1)" ' + (isFirst ? 'disabled' : '') + '>▲</button>' +
+              '<button type="button" class="order-btn" title="下移一位" onclick="moveSong(\\'' + song.key + '\\', 1)" ' + (isLast ? 'disabled' : '') + '>▼</button>' +
+              '<button type="button" class="order-btn" title="一键置底 (最后一位)" onclick="jumpSongOrder(\\'' + song.key + '\\', ' + songsData.length + ')" ' + (isLast ? 'disabled' : '') + '>🔚</button>' +
+            '</div>' +
           '</div>' +
           '<div class="song-info">' +
             '<div class="song-title-row">' + titleContent + '</div>' +
@@ -2390,12 +2469,22 @@ function getManageHTMLContent() {
           '</div>' +
           '<div class="song-actions">' +
             (!isEditing ? '<button type="button" class="act-btn" onclick="togglePreview(\\'' + escapeHtml(song.file) + '\\', \\'' + escapeHtml(song.name) + '\\')">' + (isPlaying ? '⏸ 暂停' : '▶ 试听') + '</button>' : '') +
+            (!isEditing ? '<button type="button" class="act-btn" onclick="promptSetOrder(\\'' + song.key + '\\')" title="输入数字修改次序">🔢 次序</button>' : '') +
             (!isEditing ? '<button type="button" class="act-btn" onclick="startEdit(\\'' + song.key + '\\')">✏️ 编辑</button>' : '') +
             (!isEditing ? '<button type="button" class="act-btn" onclick="clearSongLyrics(\\'' + song.key + '\\', \\'' + escapeHtml(song.name) + '\\')" title="清除该歌曲已缓存的歌词/字幕">📜 清词</button>' : '') +
             '<button type="button" class="act-btn act-btn-del" onclick="deleteSingle(\\'' + song.file + '\\', \\'' + escapeHtml(song.name) + '\\')">🗑️ 删除</button>' +
           '</div>' +
         '</div>';
       }).join('');
+
+      if (highlightKey) {
+        setTimeout(() => {
+          const el = document.getElementById('card_' + highlightKey);
+          if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          }
+        }, 50);
+      }
     }
 
     function onFilterChange() {
@@ -2422,6 +2511,12 @@ function getManageHTMLContent() {
       const count = selectedSet.size;
       document.getElementById('selectedCount').textContent = count;
       document.getElementById('batchDelBtn').disabled = (count === 0);
+      const batchMoveBtn = document.getElementById('batchMoveBtn');
+      if (batchMoveBtn) {
+        batchMoveBtn.disabled = (count === 0);
+        const countSpan = document.getElementById('batchMoveCount');
+        if (countSpan) countSpan.textContent = count;
+      }
     }
 
     function startEdit(key) {
@@ -2470,13 +2565,92 @@ function getManageHTMLContent() {
       .catch(err => alert('请求失败: ' + err.message));
     }
 
-    function moveSong(index, delta) {
-      const newIndex = index + delta;
-      if (newIndex < 0 || newIndex >= songsData.length) return;
-      const item = songsData.splice(index, 1)[0];
-      songsData.splice(newIndex, 0, item);
-      renderSongs();
+    function jumpSongOrder(key, targetOrder) {
+      const actualIndex = songsData.findIndex(s => s.key === key);
+      if (actualIndex === -1) return;
+      const song = songsData[actualIndex];
+      let target = parseInt(String(targetOrder).trim(), 10);
+      if (isNaN(target)) {
+        renderSongs();
+        return;
+      }
+      if (target < 1) target = 1;
+      if (target > songsData.length) target = songsData.length;
+      const targetIndex = target - 1;
+      if (targetIndex === actualIndex) {
+        renderSongs();
+        return;
+      }
+      const [item] = songsData.splice(actualIndex, 1);
+      songsData.splice(targetIndex, 0, item);
+      renderSongs(key);
+      syncReorderToServer();
+      showToast('✅ 已将【' + (item.name || '歌曲') + '】移至第 ' + target + ' 位');
+    }
 
+    function moveSong(key, delta) {
+      const actualIndex = songsData.findIndex(s => s.key === key);
+      if (actualIndex === -1) return;
+      const targetIndex = actualIndex + delta;
+      if (targetIndex < 0 || targetIndex >= songsData.length) return;
+      const [item] = songsData.splice(actualIndex, 1);
+      songsData.splice(targetIndex, 0, item);
+      renderSongs(key);
+      syncReorderToServer();
+      showToast('✅ 已调整为第 ' + (targetIndex + 1) + ' 位');
+    }
+
+    function promptSetOrder(key) {
+      const actualIndex = songsData.findIndex(s => s.key === key);
+      if (actualIndex === -1) return;
+      const song = songsData[actualIndex];
+      const curOrder = actualIndex + 1;
+      const input = prompt('请输入歌曲【' + (song.name || '') + '】的新播放次序：\\n当前序号：' + curOrder + '，有效范围：1 ~ ' + songsData.length, curOrder);
+      if (input === null) return;
+      const target = parseInt(String(input).trim(), 10);
+      if (isNaN(target) || target < 1 || target > songsData.length) {
+        showToast('请输入 1 到 ' + songsData.length + ' 之间的有效数字', true);
+        return;
+      }
+      jumpSongOrder(key, target);
+    }
+
+    function moveBatchToOrder() {
+      const count = selectedSet.size;
+      if (!count) {
+        showToast('请先勾选需要调整次序的歌曲', true);
+        return;
+      }
+      const input = prompt('选中的 ' + count + ' 首歌曲：\\n请输入要移动到的目标起始序号 (1 ~ ' + songsData.length + ')：', '1');
+      if (input === null) return;
+      const target = parseInt(String(input).trim(), 10);
+      if (isNaN(target) || target < 1 || target > songsData.length) {
+        showToast('请输入 1 到 ' + songsData.length + ' 之间的有效数字', true);
+        return;
+      }
+
+      const selectedItems = [];
+      const remainingItems = [];
+      songsData.forEach(s => {
+        if (selectedSet.has(s.file)) {
+          selectedItems.push(s);
+        } else {
+          remainingItems.push(s);
+        }
+      });
+
+      let insertIndex = target - 1;
+      if (insertIndex > remainingItems.length) insertIndex = remainingItems.length;
+
+      remainingItems.splice(insertIndex, 0, ...selectedItems);
+      songsData = remainingItems;
+
+      renderSongs();
+      syncReorderToServer();
+      showToast('✅ 已将选中的 ' + selectedItems.length + ' 首歌曲批量移至第 ' + target + ' 位');
+    }
+
+    function syncReorderToServer() {
       const orderedKeys = songsData.map(s => s.key);
       fetch('/cache-reorder', {
         method: 'POST',
@@ -2487,9 +2661,29 @@ function getManageHTMLContent() {
       .then(data => {
         if (!data.success) {
           console.warn('排序同步失败:', data.error);
+          showToast('排序保存失败: ' + (data.error || '未知错误'), true);
         }
       })
-      .catch(err => console.warn('排序网络错误:', err.message));
+      .catch(err => {
+        console.warn('排序网络错误:', err.message);
+        showToast('网络错误，排序未保存', true);
+      });
+    }
+
+    function showToast(message, isError) {
+      let toast = document.getElementById('mcToast');
+      if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'mcToast';
+        document.body.appendChild(toast);
+      }
+      toast.style.background = isError ? 'rgba(220, 53, 69, 0.95)' : 'rgba(45, 55, 72, 0.95)';
+      toast.textContent = message;
+      toast.classList.add('show');
+      clearTimeout(toast._timer);
+      toast._timer = setTimeout(() => {
+        toast.classList.remove('show');
+      }, 2500);
     }
 
     function clearSongLyrics(key, name) {
