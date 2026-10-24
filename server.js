@@ -75,7 +75,6 @@ fs.mkdirSync(CACHE_DIR, { recursive: true });
 const startTime = Date.now();
 const startDateStr = new Date(startTime).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
 let visitorCount = 0;
-let cachedManageHTML = null; // P4: 静态管理页 HTML 缓存
 
 // P1: metadata 内存缓存，避免每次请求都读磁盘
 let _metadataCache = null;
@@ -458,9 +457,19 @@ const server = http.createServer((req, res) => {
     });
     res.end(htmlContent);
   } else if (requestUrl.pathname === '/mc') {
-    if (!cachedManageHTML) cachedManageHTML = getManageHTMLContent();
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(cachedManageHTML);
+    try {
+      getClientVisitor(req, res);
+    } catch (error) {
+      console.warn('Visitor registration warning on /mc:', error.message);
+    }
+    const manageHTML = getManageHTMLContent();
+    res.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0'
+    });
+    res.end(manageHTML);
   } else if (requestUrl.pathname === '/share-link') {
     handleShareLink(req, res, requestUrl);
   } else if (requestUrl.pathname === '/s' || requestUrl.pathname.startsWith('/s/')) {
@@ -2939,6 +2948,12 @@ function getManageHTMLContent() {
       padding: 20px;
       animation: modalFadeIn 0.2s ease-out;
     }
+    .visitor-row {
+      transition: background 0.15s;
+    }
+    .visitor-row:hover {
+      background: #f7fafc;
+    }
     @keyframes modalFadeIn {
       from { opacity: 0; transform: translateY(-10px); }
       to { opacity: 1; transform: translateY(0); }
@@ -3598,7 +3613,7 @@ function getManageHTMLContent() {
             const lastSeenStr = formatTimeFriendly(v.lastSeen);
             const timeCol = (firstSeenStr === lastSeenStr) ? firstSeenStr : ('首次: ' + firstSeenStr + '<br>最近: <strong>' + lastSeenStr + '</strong>');
 
-            return '<tr style="border-bottom: 1px solid #f0f2f5; transition: background 0.15s;" onmouseover="this.style.background=\'#f7fafc\'" onmouseout="this.style.background=\'\'">' +
+            return '<tr class="visitor-row" style="border-bottom: 1px solid #f0f2f5;">' +
               '<td style="padding: 8px;">' + onlineBadge + '</td>' +
               '<td style="padding: 8px; font-family: monospace; font-size: 12px; color: #2d3748;"><strong>' + escapeHtml(v.ip) + '</strong></td>' +
               '<td style="padding: 8px;">' +
@@ -3607,7 +3622,7 @@ function getManageHTMLContent() {
                   '<span style="color: #2d3748; font-weight: 500;">' + escapeHtml(v.client) + '</span>' +
                 '</div>' +
                 '<div style="margin-top: 3px;">' +
-                  '<a href="javascript:void(0)" onclick="toggleUaDetail(\'ua_' + idx + '\')" style="font-size: 11px; color: #718096; text-decoration: none;">🔍 UA明细</a>' +
+                  '<a href="javascript:void(0)" class="ua-toggle-btn" data-target="ua_' + idx + '" style="font-size: 11px; color: #718096; text-decoration: none;">🔍 UA明细</a>' +
                   '<div id="ua_' + idx + '" style="display:none; font-size:10px; color:#718096; word-break:break-all; background:#edf2f7; padding:4px 6px; border-radius:4px; margin-top:4px;">' + escapeHtml(v.userAgent || '无') + '</div>' +
                 '</div>' +
               '</td>' +
@@ -3626,10 +3641,14 @@ function getManageHTMLContent() {
         });
     }
 
-    function toggleUaDetail(id) {
-      const el = document.getElementById(id);
-      if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
-    }
+    document.addEventListener('click', function(e) {
+      const btn = e.target && e.target.closest && e.target.closest('.ua-toggle-btn');
+      if (btn) {
+        const targetId = btn.getAttribute('data-target');
+        const el = document.getElementById(targetId);
+        if (el) el.style.display = (el.style.display === 'none') ? 'block' : 'none';
+      }
+    });
 
     window.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') closeVisitorModal();
