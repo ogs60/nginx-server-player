@@ -1808,7 +1808,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
         alert('当前没有可清除歌词的歌曲');
         return;
       }
-      if (!confirm('确定清除「' + currentItem.name + '」的已缓存歌词吗？\n清除后您可以点击「🔍 搜词」手动重新搜索。')) return;
+      if (!confirm('确定清除「' + currentItem.name + '」的已缓存歌词吗？\\n清除后您可以点击「🔍 搜词」手动重新搜索。')) return;
 
       try {
         for (var storageKey in localStorage) {
@@ -1854,7 +1854,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       var isPref = btn && btn.classList.contains('is-preferred');
 
       if (isPref) {
-        if (!confirm('当前歌词已是优选歌词。确定要取消优选吗？\n取消后下次将恢复默认检索规则。')) return;
+        if (!confirm('当前歌词已是优选歌词。确定要取消优选吗？\\n取消后下次将恢复默认检索规则。')) return;
         fetch('/lyrics-prefer', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1871,7 +1871,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
             }
             var meta = document.getElementById('lyricsMeta');
             if (meta && meta.textContent) {
-              meta.textContent = meta.textContent.replace(/\s*\[⭐\s*优选歌词\]/g, '');
+              meta.textContent = meta.textContent.replace(/\\s*\\[⭐\\s*优选歌词\\]/g, '');
             }
           } else {
             showToast('取消失败: ' + (data.error || '未知错误'), true);
@@ -1899,7 +1899,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
             }
             var meta = document.getElementById('lyricsMeta');
             if (meta && meta.textContent) {
-              meta.textContent = meta.textContent.replace(/\s*\[.*?\]/g, '') + ' [⭐ 优选歌词]';
+              meta.textContent = meta.textContent.replace(/\\s*\\[.*?\\]/g, '') + ' [⭐ 优选歌词]';
             }
           } else {
             showToast('保存失败: ' + (data.error || '未知错误'), true);
