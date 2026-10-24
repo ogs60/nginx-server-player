@@ -809,12 +809,13 @@ function getHTMLContent(startTime, visitorCount, startDate) {
               <button type="button" class="lyric-btn" id="btnClearLyrics" onclick="clearCurrentLyrics()" title="清除当前歌曲已缓存的错误歌词" style="display:none;color:#e53e3e;border-color:#fed7d7;">🗑️ 清词</button>
             </div>
           </div>
-          <div id="offsetControlsRow" style="display:none;align-items:center;justify-content:center;gap:6px;padding:6px 0;margin-bottom:8px;background:#f0f4f8;border-radius:6px;font-size:11px;">
+          <div id="offsetControlsRow" style="display:none;align-items:center;justify-content:center;gap:6px;padding:6px 0;margin-bottom:8px;background:#f0f4f8;border-radius:6px;font-size:11px;flex-wrap:wrap;">
             <span style="color:#64748b;">时间微调:</span>
             <button type="button" class="lyric-btn" onclick="adjustLyricOffset(-0.5)" title="歌词慢了，提前0.5秒">-0.5s 慢了</button>
             <span id="offsetDisplay" style="color:#667eea;font-weight:bold;min-width:32px;text-align:center;">0.0s</span>
             <button type="button" class="lyric-btn" onclick="adjustLyricOffset(0.5)" title="歌词快了，延后0.5秒">+0.5s 快了</button>
             <button type="button" class="lyric-btn" onclick="resetLyricOffset()" title="重置时间偏移">重置</button>
+            <button type="button" class="lyric-btn" id="btnSaveOffset" onclick="saveLyricOffsetPermanent()" title="将校准时间永久保存到服务器，下次播放无需重新校准" style="color:#15803d;border-color:#86efac;font-weight:bold;background:#f0fdf4;opacity:0.6;">💾 保存</button>
           </div>
           <div id="lyricSearchRow" style="display:none;align-items:center;gap:6px;margin-bottom:8px;">
             <input type="text" id="manualLyricInput" class="url-input" style="margin-bottom:0;padding:4px 8px;font-size:12px;height:28px;flex:1;" placeholder="输入正确的 歌名 歌手 重新搜索" onkeydown="if(event.key==='Enter')submitManualLyrics()">
@@ -1670,6 +1671,137 @@ function getHTMLContent(startTime, visitorCount, startDate) {
           btn.classList.toggle('active', !!isOpen);
         }
       }
+      var saveBtn = document.getElementById('btnSaveOffset');
+      if (saveBtn) {
+        if (Math.abs(val) > 0.001) {
+          saveBtn.style.opacity = '1';
+          saveBtn.style.borderColor = '#16a34a';
+          saveBtn.title = '将当前偏差 (' + (val > 0 ? '+' : '') + val.toFixed(1) + 's) 永久保存到服务器，下次播放无需重新校准';
+        } else {
+          saveBtn.style.opacity = '0.6';
+          saveBtn.style.borderColor = '#86efac';
+          saveBtn.title = '调整微调时间后点击保存，可永久写入服务器';
+        }
+      }
+    }
+
+    function shiftLrcTimestamps(lrcText, offsetSeconds) {
+      if (!offsetSeconds || Math.abs(offsetSeconds) < 0.001) return lrcText;
+      var lines = lrcText.split('\n');
+      var timeRe = /\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]/g;
+      return lines.map(function(line) {
+        var trimmed = line.trim();
+        if (/^\[[a-z]+:.*\]$/i.test(trimmed)) {
+          if (/^\[offset:\s*([+-]?\d+)\]/i.test(trimmed)) return '';
+          return line;
+        }
+        return line.replace(timeRe, function(match, m, s, msStr) {
+          var minutes = parseInt(m, 10);
+          var seconds = parseInt(s, 10);
+          var ms = 0;
+          if (msStr) {
+            ms = msStr.length === 1 ? parseInt(msStr, 10) * 100 : (msStr.length === 2 ? parseInt(msStr, 10) * 10 : parseInt(msStr, 10));
+          }
+          var totalSec = minutes * 60 + seconds + ms / 1000 + offsetSeconds;
+          if (totalSec < 0) totalSec = 0;
+          var newMin = Math.floor(totalSec / 60);
+          var remainSec = totalSec % 60;
+          var secInt = Math.floor(remainSec);
+          var msPart = Math.round((remainSec - secInt) * 100);
+          if (msPart >= 100) {
+            msPart = 0;
+            secInt += 1;
+          }
+          var pad = function(n, len) {
+            var str = String(n);
+            while (str.length < len) str = '0' + str;
+            return str;
+          };
+          return '[' + pad(newMin, 2) + ':' + pad(secInt, 2) + '.' + pad(msPart, 2) + ']';
+        });
+      }).filter(function(line) { return line !== ''; }).join('\n');
+    }
+
+    function saveLyricOffsetPermanent() {
+      var currentItem = (currentIndex >= 0 && playlistItems[currentIndex]) ? playlistItems[currentIndex] : null;
+      if (!currentItem || (!currentItem.key && !currentItem.url)) {
+        showToast('当前没有正在播放的歌曲', true);
+        return;
+      }
+      if (!currentRawLyrics) {
+        showToast('当前无可用歌词可保存', true);
+        return;
+      }
+
+      var offset = getCurrentSongOffset();
+      if (Math.abs(offset) < 0.001) {
+        showToast('当前时间偏差为 0，无需保存');
+        return;
+      }
+
+      var saveBtn = document.getElementById('btnSaveOffset');
+      var origText = saveBtn ? saveBtn.textContent : '';
+      if (saveBtn) {
+        saveBtn.textContent = '⏳ 保存中...';
+        saveBtn.disabled = true;
+      }
+
+      var shiftedLrc = shiftLrcTimestamps(currentRawLyrics, offset);
+
+      fetch('/lyrics-prefer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          key: currentItem.key || '',
+          url: currentItem.url || '',
+          lyrics: shiftedLrc,
+          action: 'set'
+        })
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (saveBtn) {
+          saveBtn.textContent = origText;
+          saveBtn.disabled = false;
+        }
+        if (data.success) {
+          // 1. 更新当前内存中歌词
+          currentRawLyrics = shiftedLrc;
+          lyricLines = parseLrc(shiftedLrc);
+
+          // 2. 将临时偏移量归零（因为已经永久写进时间戳中了）
+          var key = getSongKey();
+          if (key) delete userLyricOffsets[key];
+          try { localStorage.setItem('bear_lyric_offsets', JSON.stringify(userLyricOffsets)); } catch (e) {}
+          updateOffsetDisplay();
+
+          // 3. 更新界面优选状态标识
+          var pinBtn = document.getElementById('btnLyricPin');
+          if (pinBtn) {
+            pinBtn.textContent = '★ 已优选';
+            pinBtn.classList.add('is-preferred');
+            pinBtn.title = '当前歌词为手动校准/优选歌词（点击可取消优选）';
+          }
+          var meta = document.getElementById('lyricsMeta');
+          if (meta && meta.textContent) {
+            meta.textContent = meta.textContent.replace(/\s*\[.*?\]/g, '') + ' [⭐ 已校准保存]';
+          }
+
+          // 4. 即时同步当前播放进度
+          if (currentPlayer) updateLyricSync(currentPlayer.currentTime);
+
+          showToast('💾 歌词校准已永久保存！下次播放无需重新校准');
+        } else {
+          showToast('保存校准失败: ' + (data.error || '未知错误'), true);
+        }
+      })
+      .catch(function(err) {
+        if (saveBtn) {
+          saveBtn.textContent = origText;
+          saveBtn.disabled = false;
+        }
+        showToast('保存网络错误: ' + err.message, true);
+      });
     }
 
     function toggleOffsetControls() {
@@ -4521,9 +4653,14 @@ function handleLyricsPrefer(req, res) {
   req.on('end', () => {
     try {
       const data = JSON.parse(body || '{}');
-      const key = String(data.key || '').trim();
+      let key = String(data.key || '').trim();
       const lyrics = String(data.lyrics || '').trim();
       const action = String(data.action || 'set').trim();
+      const songUrl = String(data.url || '').trim();
+
+      if (!key && songUrl && validateYouTubeUrl(songUrl)) {
+        key = getYouTubeCacheKey(songUrl, 'mp3');
+      }
 
       if (!key || !/^[a-f0-9]{8,64}$/i.test(key)) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
