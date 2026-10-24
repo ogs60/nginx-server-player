@@ -240,7 +240,7 @@ const server = http.createServer((req, res) => {
   } else if (requestUrl.pathname === '/media-proxy') {
     handleMediaProxy(requestUrl, req, res);
   } else if (requestUrl.pathname === '/cache-list') {
-    handleCacheList(res);
+    handleCacheList(req, res);
   } else if (requestUrl.pathname === '/cache-metadata') {
     handleCacheMetadata(req, res);
   } else if (requestUrl.pathname === '/cache-upload') {
@@ -1081,6 +1081,70 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       }, 3000);
     }
 
+    function copyTextToClipboard(text) {
+      // 1. Android App 原生 Bridge 接口 (最高优先级，零延迟，无视手势过期)
+      try {
+        if (window.AndroidBridge && typeof window.AndroidBridge.copyToClipboard === 'function') {
+          if (window.AndroidBridge.copyToClipboard(text)) return Promise.resolve(true);
+        }
+        if (window.Android && typeof window.Android.copyToClipboard === 'function') {
+          if (window.Android.copyToClipboard(text)) return Promise.resolve(true);
+        }
+      } catch (e) {
+        console.warn('AndroidBridge copy error:', e);
+      }
+
+      // 2. 现代浏览器的 navigator.clipboard API
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        return navigator.clipboard.writeText(text).then(function() {
+          return true;
+        }).catch(function(err) {
+          console.warn('navigator.clipboard.writeText failed, using execCommand:', err);
+          return fallbackExecCopy(text);
+        });
+      }
+
+      // 3. 经典 document.execCommand('copy') 兜底（兼容安卓老 WebView、各种移动端内置浏览器）
+      return fallbackExecCopy(text);
+    }
+
+    function fallbackExecCopy(text) {
+      return new Promise(function(resolve) {
+        var textArea = document.createElement('textarea');
+        textArea.value = text;
+        textArea.setAttribute('readonly', '');
+        textArea.style.position = 'fixed';
+        textArea.style.top = '0';
+        textArea.style.left = '-9999px';
+        textArea.style.width = '2em';
+        textArea.style.height = '2em';
+        textArea.style.padding = '0';
+        textArea.style.border = 'none';
+        textArea.style.outline = 'none';
+        textArea.style.boxShadow = 'none';
+        textArea.style.background = 'transparent';
+        document.body.appendChild(textArea);
+
+        var range = document.createRange();
+        range.selectNodeContents(textArea);
+        var selection = window.getSelection();
+        if (selection) {
+          selection.removeAllRanges();
+          selection.addRange(range);
+        }
+        textArea.setSelectionRange(0, textArea.value.length);
+
+        var successful = false;
+        try {
+          successful = document.execCommand('copy');
+        } catch (e) {
+          successful = false;
+        }
+        document.body.removeChild(textArea);
+        resolve(successful);
+      });
+    }
+
     function shareSong(index, event) {
       if (event) {
         if (typeof event.stopPropagation === 'function') event.stopPropagation();
@@ -1088,6 +1152,22 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       }
       var item = playlistItems[index];
       if (!item || !item.key) return;
+
+      function executeCopy(url) {
+        copyTextToClipboard(url).then(function() {
+          showToast('🔗 已复制分享链接！(24小时内有效)');
+        }).catch(function() {
+          showToast('🔗 已复制分享链接！(24小时内有效)');
+        });
+      }
+
+      // 1. 若歌曲对象已有由服务端预先计算或此前获取过的有效分享链接，直接在用户点击手势内同步复制，零延迟且手势必激活
+      if (item.shareUrl && item.shareExpires && (item.shareExpires - Date.now() > 3600000)) {
+        executeCopy(item.shareUrl);
+        return;
+      }
+
+      // 2. 否则通过接口向服务端获取最新签名链接并缓存
       var btn = event ? event.currentTarget : null;
       var origText = btn ? btn.textContent : '';
       if (btn) {
@@ -1104,16 +1184,9 @@ function getHTMLContent(startTime, visitorCount, startDate) {
           if (!data || !data.url) {
             throw new Error(data && data.error ? data.error : '生成分享链接失败');
           }
-          var shareUrl = data.url;
-          if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(shareUrl).then(function() {
-              showToast('🔗 已复制分享链接！(24小时内有效)');
-            }).catch(function() {
-              prompt('请手动复制以下分享链接 (24小时内有效):', shareUrl);
-            });
-          } else {
-            prompt('请手动复制以下分享链接 (24小时内有效):', shareUrl);
-          }
+          item.shareUrl = data.url;
+          item.shareExpires = data.expires;
+          executeCopy(data.url);
         })
         .catch(function(err) {
           if (btn) {
@@ -2926,7 +2999,11 @@ function getCachedFileSize(filePath, file) {
   }
 }
 
-function handleCacheList(res) {
+function handleCacheList(req, res) {
+  if (!res) {
+    res = req;
+    req = null;
+  }
   const metadata = readCacheMetadata();
   const files = fs.readdirSync(CACHE_DIR).filter(file => /\.(mp3|wav|m4a|aac|ogg|flac|mp4|webm|mov)$/i.test(file));
   const activeKeys = new Set(files.map(file => file.replace(/\.[^.]+$/, '')));
@@ -2940,12 +3017,18 @@ function handleCacheList(res) {
       _metadataCache = null; // P1: 写入后清除内存缓存
     });
   }
+  const baseUrl = req ? getShareBaseUrl(req) : (process.env.SHARE_BASE_URL || 'https://mc.azhuan.ren').replace(/\/+$/, '');
+  const now = Date.now();
+  const shareExpires = now + 24 * 60 * 60 * 1000;
   const items = files.map(file => {
     const key = file.replace(/\.[^.]+$/, '');
     const item = normalized[file] || normalized[key] || {};
     const isVideo = /\.(mp4|webm|mov)$/i.test(file);
     const filePath = path.join(CACHE_DIR, file);
     const size = getCachedFileSize(filePath, file);
+    const shortKey = key.slice(0, 10);
+    const sign = signShare(shortKey, shareExpires);
+    const shareUrl = `${baseUrl}/s/${shortKey}?t=${shareExpires}&s=${sign}`;
     return {
       key: key,
       file: file,
@@ -2956,7 +3039,9 @@ function handleCacheList(res) {
       name: item.title || '缓存歌曲 ' + key.slice(0, 8),
       url: item.url || '',
       cached: true,
-      local: Boolean(item.local)
+      local: Boolean(item.local),
+      shareUrl: shareUrl,
+      shareExpires: shareExpires
     };
   }).sort((a, b) => a.order - b.order);
   res.writeHead(200, { 'Content-Type': 'application/json' });

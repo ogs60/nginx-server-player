@@ -1,12 +1,16 @@
 package com.bear.musicplayer;
 
 import android.annotation.SuppressLint;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.View;
+import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
@@ -82,6 +86,11 @@ public class MainActivity extends AppCompatActivity {
         // 标识 UA：注入专属标识，确保 Nginx 识别为移动 App 客户端直接秒进
         String originalUa = settings.getUserAgentString();
         settings.setUserAgentString(originalUa + " BearMusicApp/1.0 WebIntoApp");
+
+        // 注册原生交互 Bridge，用于网页与 Android 系统剪贴板等原生能力交互
+        AndroidBridge bridge = new AndroidBridge();
+        webView.addJavascriptInterface(bridge, "AndroidBridge");
+        webView.addJavascriptInterface(bridge, "Android");
     }
 
     private void initWebClients() {
@@ -233,5 +242,40 @@ public class MainActivity extends AppCompatActivity {
             webView.destroy();
         }
         super.onDestroy();
+    }
+
+    /**
+     * 原生 JS 桥接类：为 WebView 提供系统原生能力调用
+     */
+    public class AndroidBridge {
+        /**
+         * 将文本复制到 Android 系统剪贴板
+         */
+        @JavascriptInterface
+        public boolean copyToClipboard(final String text) {
+            if (text == null) return false;
+            try {
+                ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                if (clipboard != null) {
+                    ClipData clip = ClipData.newPlainText("share_url", text);
+                    clipboard.setPrimaryClip(clip);
+                    return true;
+                }
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    try {
+                        ClipboardManager cb = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                        if (cb != null) {
+                            ClipData clip = ClipData.newPlainText("share_url", text);
+                            cb.setPrimaryClip(clip);
+                        }
+                    } catch (Exception ex) {
+                        ex.printStackTrace();
+                    }
+                });
+                return true;
+            }
+            return false;
+        }
     }
 }
