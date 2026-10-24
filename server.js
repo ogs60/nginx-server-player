@@ -137,14 +137,122 @@ function writeVisitorData(data) {
   fs.renameSync(tempPath, VISITOR_META);
 }
 
+function getClientIp(req) {
+  let ip = '';
+  const xForwardedFor = req.headers['x-forwarded-for'];
+  if (xForwardedFor) {
+    ip = String(xForwardedFor).split(',')[0].trim();
+  } else if (req.headers['x-real-ip']) {
+    ip = String(req.headers['x-real-ip']).trim();
+  } else if (req.headers['cf-connecting-ip']) {
+    ip = String(req.headers['cf-connecting-ip']).trim();
+  } else if (req.socket && req.socket.remoteAddress) {
+    ip = String(req.socket.remoteAddress).trim();
+  }
+  if (ip.startsWith('::ffff:')) {
+    ip = ip.substring(7);
+  }
+  return ip || '127.0.0.1';
+}
+
+function parseClientInfo(userAgent = '') {
+  const ua = String(userAgent || '').trim();
+  if (!ua) {
+    return {
+      client: '未知客户端',
+      platform: '未知系统',
+      browser: '未知浏览器',
+      device: '未知设备',
+      isApp: false
+    };
+  }
+
+  const isBearApp = /BearMusicApp(?:\/([0-9.]+))?/i.test(ua);
+  const isWebIntoApp = /WebIntoApp/i.test(ua);
+  const isApp = isBearApp || isWebIntoApp;
+
+  let platform = '未知系统';
+  let device = '电脑 (Desktop)';
+  if (/Android/i.test(ua)) {
+    const match = ua.match(/Android\s+([0-9.]+)/i);
+    platform = match ? `Android ${match[1]}` : 'Android';
+    device = '手机 (Mobile)';
+  } else if (/iPhone/i.test(ua)) {
+    const match = ua.match(/OS\s+([0-9_]+)/i);
+    platform = match ? `iOS ${match[1].replace(/_/g, '.')}` : 'iOS';
+    device = '手机 (iPhone)';
+  } else if (/iPad/i.test(ua)) {
+    const match = ua.match(/OS\s+([0-9_]+)/i);
+    platform = match ? `iPadOS ${match[1].replace(/_/g, '.')}` : 'iPadOS';
+    device = '平板 (iPad)';
+  } else if (/Macintosh|Mac OS X/i.test(ua)) {
+    const match = ua.match(/Mac OS X\s+([0-9_]+)/i);
+    platform = match ? `macOS ${match[1].replace(/_/g, '.')}` : 'macOS';
+    device = '电脑 (Mac)';
+  } else if (/Windows NT/i.test(ua)) {
+    device = '电脑 (Windows)';
+    if (/Windows NT 10\.0/i.test(ua)) platform = 'Windows 10/11';
+    else if (/Windows NT 6\.3/i.test(ua)) platform = 'Windows 8.1';
+    else if (/Windows NT 6\.1/i.test(ua)) platform = 'Windows 7';
+    else platform = 'Windows';
+  } else if (/Linux/i.test(ua)) {
+    platform = 'Linux';
+    device = '电脑 (Linux)';
+  }
+
+  let browser = 'Web 浏览器';
+  if (isBearApp) {
+    const match = ua.match(/BearMusicApp\/([0-9.]+)/i);
+    const ver = match ? match[1] : '1.0';
+    browser = `BearMusicApp v${ver}`;
+  } else if (isWebIntoApp) {
+    browser = 'WebIntoApp';
+  } else if (/MicroMessenger/i.test(ua)) {
+    browser = '微信内置浏览器';
+  } else if (/QQ\//i.test(ua)) {
+    browser = '手机QQ';
+  } else if (/Edg(?:e|A|iOS)?\/([0-9.]+)/i.test(ua)) {
+    const match = ua.match(/Edg(?:e|A|iOS)?\/([0-9.]+)/i);
+    browser = `Edge ${match ? match[1].split('.')[0] : ''}`.trim();
+  } else if (/Chrome\/([0-9.]+)/i.test(ua) && !/Chromium|Edg/i.test(ua)) {
+    const match = ua.match(/Chrome\/([0-9.]+)/i);
+    browser = `Chrome ${match ? match[1].split('.')[0] : ''}`.trim();
+  } else if (/Safari/i.test(ua) && !/Chrome|Android/i.test(ua)) {
+    browser = 'Safari';
+  } else if (/Firefox\/([0-9.]+)/i.test(ua)) {
+    const match = ua.match(/Firefox\/([0-9.]+)/i);
+    browser = `Firefox ${match ? match[1].split('.')[0] : ''}`.trim();
+  } else if (/curl/i.test(ua)) {
+    browser = 'curl';
+    device = '终端命令行';
+    platform = 'CLI';
+  } else if (/wget/i.test(ua)) {
+    browser = 'wget';
+    device = '终端命令行';
+    platform = 'CLI';
+  }
+
+  let client = '';
+  if (isBearApp) {
+    client = `🐻 熊宝宝App (${platform})`;
+  } else if (isWebIntoApp) {
+    client = `📱 WebIntoApp (${platform})`;
+  } else {
+    client = `${browser} (${platform})`;
+  }
+
+  return { client, platform, browser, device, isApp };
+}
+
 function getVisitorIdentity(req) {
   const deviceCookie = String(req.headers.cookie || '').split(';')
     .map(cookie => cookie.trim())
     .find(cookie => cookie.startsWith('bear_device='));
   const deviceId = deviceCookie ? deviceCookie.slice('bear_device='.length) : crypto.randomUUID();
-  const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+  const ip = getClientIp(req);
   return {
     deviceId,
+    ip,
     visitorId: crypto.createHash('sha256').update(`${ip}|${deviceId}`).digest('hex'),
     secure: req.headers['x-forwarded-proto'] === 'https' || req.socket.encrypted
   };
@@ -164,32 +272,78 @@ function getYouTubeFormat(value) {
 }
 
 function getClientVisitor(req, res) {
-  const { deviceId, visitorId, secure } = getVisitorIdentity(req);
-  const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+  const { deviceId, visitorId, ip, secure } = getVisitorIdentity(req);
   const date = getShanghaiDate();
   const visitors = readVisitorData();
   visitors.days[date] ||= {};
   const dayVisitors = visitors.days[date];
   const username = String(req.headers['x-auth-request-user'] || '').trim();
   const email = String(req.headers['x-auth-request-email'] || '').trim();
+  const userAgent = String(req.headers['user-agent'] || '').trim();
+  const clientInfo = parseClientInfo(userAgent);
+  const nowIso = new Date().toISOString();
+
   const existing = dayVisitors[visitorId];
 
   if (!existing) {
     dayVisitors[visitorId] = {
-      firstSeen: new Date().toISOString(),
+      firstSeen: nowIso,
+      lastSeen: nowIso,
+      visitCount: 1,
       ip,
+      client: clientInfo.client,
+      platform: clientInfo.platform,
+      browser: clientInfo.browser,
+      device: clientInfo.device,
+      isApp: clientInfo.isApp,
+      userAgent,
       ...(username ? { username } : {}),
       ...(email ? { email } : {})
     };
     writeVisitorData(visitors);
-  } else if ((username && existing.username !== username) || (email && existing.email !== email)) {
-    if (username) existing.username = username;
-    if (email) existing.email = email;
-    existing.lastSeen = new Date().toISOString();
-    writeVisitorData(visitors);
+  } else {
+    let dirty = false;
+    existing.visitCount = (existing.visitCount || 1) + 1;
+    existing.lastSeen = nowIso;
+    dirty = true;
+
+    if (ip && existing.ip !== ip) {
+      existing.ip = ip;
+      dirty = true;
+    }
+    if (userAgent && (!existing.userAgent || existing.userAgent !== userAgent)) {
+      existing.userAgent = userAgent;
+      existing.client = clientInfo.client;
+      existing.platform = clientInfo.platform;
+      existing.browser = clientInfo.browser;
+      existing.device = clientInfo.device;
+      existing.isApp = clientInfo.isApp;
+      dirty = true;
+    } else if (!existing.client) {
+      existing.client = clientInfo.client;
+      existing.platform = clientInfo.platform;
+      existing.browser = clientInfo.browser;
+      existing.device = clientInfo.device;
+      existing.isApp = clientInfo.isApp;
+      dirty = true;
+    }
+    if (username && existing.username !== username) {
+      existing.username = username;
+      dirty = true;
+    }
+    if (email && existing.email !== email) {
+      existing.email = email;
+      dirty = true;
+    }
+    if (dirty) {
+      writeVisitorData(visitors);
+    }
   }
+
   visitorCount = Object.keys(dayVisitors).length;
-  setVisitorCookie(res, deviceId, secure);
+  if (res) {
+    setVisitorCookie(res, deviceId, secure);
+  }
   return visitorCount;
 }
 
@@ -198,8 +352,89 @@ function handleOnlineVisitors(req, res) {
   const { deviceId, visitorId, secure } = getVisitorIdentity(req);
   ONLINE_VISITORS.set(visitorId, Date.now());
   setVisitorCookie(res, deviceId, secure);
+
+  // 保证在线访客完成今日登记（兜底根路径可能被离线/客户端强缓存跳过登记的情况）
+  try {
+    const date = getShanghaiDate();
+    const visitors = readVisitorData();
+    visitors.days[date] ||= {};
+    const dayVisitors = visitors.days[date];
+    if (!dayVisitors[visitorId]) {
+      getClientVisitor(req, null);
+    } else {
+      const existing = dayVisitors[visitorId];
+      const now = Date.now();
+      const last = new Date(existing.lastSeen || existing.firstSeen || 0).getTime();
+      // 心跳超过 3 分钟更新一次持久化活跃时间
+      if (now - last > 3 * 60 * 1000) {
+        existing.lastSeen = new Date().toISOString();
+        writeVisitorData(visitors);
+      }
+    }
+  } catch (err) {
+    console.warn('Online visitor sync warning:', err.message);
+  }
+
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ count: ONLINE_VISITORS.size }));
+}
+
+function handleVisitorsList(req, res, url) {
+  try {
+    const queryDate = url.searchParams.get('date') || getShanghaiDate();
+    const visitors = readVisitorData();
+    const dayVisitors = (visitors.days && visitors.days[queryDate]) || {};
+    const now = Date.now();
+
+    const list = Object.entries(dayVisitors).map(([id, rawItem]) => {
+      const item = rawItem || {};
+      const userAgent = item.userAgent || '';
+      const fallbackInfo = parseClientInfo(userAgent);
+      const isOnline = ONLINE_VISITORS.has(id) && (now - ONLINE_VISITORS.get(id) < ONLINE_VISITOR_TIMEOUT);
+
+      return {
+        id: id.substring(0, 16),
+        ip: item.ip || '未知',
+        client: item.client || fallbackInfo.client,
+        platform: item.platform || fallbackInfo.platform,
+        browser: item.browser || fallbackInfo.browser,
+        device: item.device || fallbackInfo.device,
+        isApp: typeof item.isApp === 'boolean' ? item.isApp : fallbackInfo.isApp,
+        firstSeen: item.firstSeen || '',
+        lastSeen: item.lastSeen || item.firstSeen || '',
+        visitCount: item.visitCount || 1,
+        username: item.username || '',
+        email: item.email || '',
+        userAgent: userAgent,
+        isOnline
+      };
+    });
+
+    list.sort((a, b) => new Date(b.lastSeen || 0) - new Date(a.lastSeen || 0));
+
+    const availableDates = Object.keys(visitors.days || {}).sort().reverse();
+    if (!availableDates.includes(queryDate)) {
+      availableDates.unshift(queryDate);
+    }
+
+    const appCount = list.filter(v => v.isApp).length;
+    const webCount = list.length - appCount;
+
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({
+      success: true,
+      date: queryDate,
+      availableDates,
+      totalUniqueVisitors: list.length,
+      onlineCount: ONLINE_VISITORS.size,
+      appCount,
+      webCount,
+      visitors: list
+    }));
+  } catch (err) {
+    res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ success: false, error: err.message }));
+  }
 }
 
 const server = http.createServer((req, res) => {
@@ -215,7 +450,12 @@ const server = http.createServer((req, res) => {
     
     const htmlContent = getHTMLContent(startTime, currentVisitorNumber, startDateStr);
     
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0'
+    });
     res.end(htmlContent);
   } else if (requestUrl.pathname === '/mc') {
     if (!cachedManageHTML) cachedManageHTML = getManageHTMLContent();
@@ -233,6 +473,8 @@ const server = http.createServer((req, res) => {
     handleCacheBatchDelete(req, res);
   } else if (requestUrl.pathname === '/online-visitors') {
     handleOnlineVisitors(req, res);
+  } else if (requestUrl.pathname === '/visitors-list') {
+    handleVisitorsList(req, res, requestUrl);
   } else if (requestUrl.pathname === '/preload') {
     handlePreload(requestUrl, req, res);
   } else if (requestUrl.pathname === '/yt-audio') {
@@ -764,11 +1006,11 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       </div>
       <div class="info">
         <span class="label">今日独立访客：</span>
-        <span class="value">${visitorCount}</span>
+        <span class="value"><a href="/mc?open=visitors" style="color:inherit; text-decoration:none; border-bottom:1px dashed rgba(255,255,255,0.4);" title="点击前往后台查看详细访客记录">${visitorCount}</a></span>
       </div>
       <div class="info">
         <span class="label">当前在线人数：</span>
-        <span class="value"><span id="onlineVisitors">统计中...</span></span>
+        <span class="value"><a href="/mc?open=visitors" style="color:inherit; text-decoration:none; border-bottom:1px dashed rgba(255,255,255,0.4);" title="点击前往后台查看详细访客记录"><span id="onlineVisitors">统计中...</span></a></span>
       </div>
     </div>
     
@@ -2676,6 +2918,31 @@ function getManageHTMLContent() {
       flex: 1;
       min-width: 240px;
     }
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.65);
+      backdrop-filter: blur(4px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 2000;
+      padding: 16px;
+    }
+    .modal-content {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
+      padding: 20px;
+      animation: modalFadeIn 0.2s ease-out;
+    }
+    @keyframes modalFadeIn {
+      from { opacity: 0; transform: translateY(-10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
   </style>
 </head>
 <body>
@@ -2685,7 +2952,10 @@ function getManageHTMLContent() {
         <h1>🎵 熊宝宝的音乐播放器 · 歌曲管理</h1>
         <p>管理曲库歌曲、在线重命名、上下调整排序与批量删除</p>
       </div>
-      <div>
+      <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+        <button type="button" class="btn btn-primary" onclick="openVisitorModal()" style="background: linear-gradient(135deg, #38a169, #2f855a); padding: 8px 14px; font-size: 13px; box-shadow: 0 2px 6px rgba(56, 161, 105, 0.25);">
+          👥 访客记录 (<span id="headerVisitorBadge">0</span>)
+        </button>
         <a href="/" class="back-btn">◀ 返回播放器</a>
       </div>
     </div>
@@ -2715,9 +2985,15 @@ function getManageHTMLContent() {
       </div>
     </div>
 
-    <div id="statsBar" style="font-size: 12px; color: #718096; margin-bottom: 12px; display: flex; justify-content: space-between;">
-      <span>共 <strong id="songCount" style="color: #667eea;">0</strong> 首歌曲</span>
-      <span>总存储占用：<strong id="diskSize" style="color: #667eea;">0 MB</strong></span>
+    <div id="statsBar" style="font-size: 12px; color: #718096; margin-bottom: 12px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+      <div>
+        <span>共 <strong id="songCount" style="color: #667eea;">0</strong> 首歌曲</span>
+        <span style="margin-left: 12px;">总存储占用：<strong id="diskSize" style="color: #667eea;">0 MB</strong></span>
+      </div>
+      <div style="display: flex; gap: 14px; align-items: center;">
+        <span style="cursor: pointer;" onclick="openVisitorModal()" title="点击查看访客记录">今日独立访客：<strong id="mcTodayVisitors" style="color: #667eea;">0</strong> 位</span>
+        <span style="cursor: pointer;" onclick="openVisitorModal()" title="点击查看访客记录">当前在线：<strong id="mcOnlineVisitors" style="color: #38a169;">0</strong> 人</span>
+      </div>
     </div>
 
     <div id="songList" class="song-list">
@@ -3216,7 +3492,210 @@ function getManageHTMLContent() {
     }
 
     loadSongs();
+    updateVisitorStats();
+    if (window.location.search.includes('open=visitors') || window.location.hash === '#visitors') {
+      openVisitorModal();
+    }
+
+    function updateVisitorStats() {
+      fetch('/visitors-list')
+        .then(r => r.json())
+        .then(data => {
+          if (data && data.success) {
+            const count = data.totalUniqueVisitors || 0;
+            const online = data.onlineCount || 0;
+            const badge = document.getElementById('headerVisitorBadge');
+            if (badge) badge.textContent = count;
+            const today = document.getElementById('mcTodayVisitors');
+            if (today) today.textContent = count;
+            const onEl = document.getElementById('mcOnlineVisitors');
+            if (onEl) onEl.textContent = online;
+          }
+        })
+        .catch(() => {});
+    }
+
+    function openVisitorModal(date) {
+      const modal = document.getElementById('visitorModal');
+      if (modal) {
+        modal.style.display = 'flex';
+        loadVisitorRecords(date);
+      }
+    }
+
+    function closeVisitorModal() {
+      const modal = document.getElementById('visitorModal');
+      if (modal) modal.style.display = 'none';
+    }
+
+    function formatTimeFriendly(isoStr) {
+      if (!isoStr) return '-';
+      try {
+        const d = new Date(isoStr);
+        if (isNaN(d.getTime())) return isoStr;
+        return d.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      } catch {
+        return isoStr;
+      }
+    }
+
+    function loadVisitorRecords(date) {
+      const select = document.getElementById('visitorDateSelect');
+      const targetDate = date || (select ? select.value : '');
+      const url = targetDate ? ('/visitors-list?date=' + encodeURIComponent(targetDate)) : '/visitors-list';
+
+      fetch(url)
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          if (!data || !data.success) {
+            showToast('获取访客记录失败: ' + (data && data.error || '未知错误'), true);
+            return;
+          }
+
+          document.getElementById('vmTotalCount').textContent = data.totalUniqueVisitors || 0;
+          document.getElementById('vmOnlineCount').textContent = data.onlineCount || 0;
+          document.getElementById('vmAppCount').textContent = data.appCount || 0;
+          document.getElementById('vmWebCount').textContent = data.webCount || 0;
+
+          const badge = document.getElementById('headerVisitorBadge');
+          if (badge) badge.textContent = data.totalUniqueVisitors || 0;
+          const today = document.getElementById('mcTodayVisitors');
+          if (today) today.textContent = data.totalUniqueVisitors || 0;
+          const onEl = document.getElementById('mcOnlineVisitors');
+          if (onEl) onEl.textContent = data.onlineCount || 0;
+
+          if (select && data.availableDates) {
+            select.innerHTML = data.availableDates.map(function(d) {
+              const sel = (d === data.date) ? ' selected' : '';
+              const isToday = (d === data.availableDates[0]) ? ' (今日)' : '';
+              return '<option value="' + d + '"' + sel + '>' + d + isToday + '</option>';
+            }).join('');
+          }
+
+          const tbody = document.getElementById('visitorTableBody');
+          if (!data.visitors || data.visitors.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" style="padding: 30px; text-align: center; color: #a0aec0;">暂无访客记录</td></tr>';
+            return;
+          }
+
+          tbody.innerHTML = data.visitors.map(function(v, idx) {
+            const onlineBadge = v.isOnline
+              ? '<span style="display:inline-flex; align-items:center; gap:4px; color:#2f855a; font-weight:600;"><span style="width:8px; height:8px; background:#48bb78; border-radius:50%; display:inline-block;"></span>在线</span>'
+              : '<span style="color:#a0aec0;">⚪ 离线</span>';
+
+            const clientTag = v.isApp
+              ? '<span style="background:linear-gradient(135deg, #667eea, #764ba2); color:#fff; border-radius:4px; padding:2px 6px; font-size:11px; font-weight:600;">🐻 熊宝宝App</span>'
+              : '<span style="background:#edf2f7; color:#4a5568; border-radius:4px; padding:2px 6px; font-size:11px;">🌐 网页端</span>';
+
+            let loginUser = '<span style="color:#a0aec0;">未登录访客</span>';
+            if (v.username) {
+              loginUser = '<strong>' + escapeHtml(v.username) + '</strong>' + (v.email ? '<br><small style="color:#718096">' + escapeHtml(v.email) + '</small>' : '');
+            } else if (v.isApp) {
+              loginUser = '<span style="color:#38a169; font-weight:600; font-size:11px; background:#f0fff4; padding:2px 6px; border-radius:4px; border:1px solid #c6f6d5;">⚡ App免登秒进</span>';
+            }
+
+            const firstSeenStr = formatTimeFriendly(v.firstSeen);
+            const lastSeenStr = formatTimeFriendly(v.lastSeen);
+            const timeCol = (firstSeenStr === lastSeenStr) ? firstSeenStr : ('首次: ' + firstSeenStr + '<br>最近: <strong>' + lastSeenStr + '</strong>');
+
+            return '<tr style="border-bottom: 1px solid #f0f2f5; transition: background 0.15s;" onmouseover="this.style.background=\'#f7fafc\'" onmouseout="this.style.background=\'\'">' +
+              '<td style="padding: 8px;">' + onlineBadge + '</td>' +
+              '<td style="padding: 8px; font-family: monospace; font-size: 12px; color: #2d3748;"><strong>' + escapeHtml(v.ip) + '</strong></td>' +
+              '<td style="padding: 8px;">' +
+                '<div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">' +
+                  clientTag +
+                  '<span style="color: #2d3748; font-weight: 500;">' + escapeHtml(v.client) + '</span>' +
+                '</div>' +
+                '<div style="margin-top: 3px;">' +
+                  '<a href="javascript:void(0)" onclick="toggleUaDetail(\'ua_' + idx + '\')" style="font-size: 11px; color: #718096; text-decoration: none;">🔍 UA明细</a>' +
+                  '<div id="ua_' + idx + '" style="display:none; font-size:10px; color:#718096; word-break:break-all; background:#edf2f7; padding:4px 6px; border-radius:4px; margin-top:4px;">' + escapeHtml(v.userAgent || '无') + '</div>' +
+                '</div>' +
+              '</td>' +
+              '<td style="padding: 8px; color: #4a5568;">' +
+                escapeHtml(v.platform || '-') + '<br>' +
+                '<small style="color: #718096;">' + escapeHtml(v.device || '-') + '</small>' +
+              '</td>' +
+              '<td style="padding: 8px;">' + loginUser + '</td>' +
+              '<td style="padding: 8px; font-size: 11px; color: #4a5568;">' + timeCol + '</td>' +
+              '<td style="padding: 8px; text-align: center; font-weight: 600; color: #667eea;">' + (v.visitCount || 1) + '</td>' +
+            '</tr>';
+          }).join('');
+        })
+        .catch(function(err) {
+          showToast('加载失败: ' + err.message, true);
+        });
+    }
+
+    function toggleUaDetail(id) {
+      const el = document.getElementById(id);
+      if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+    }
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeVisitorModal();
+    });
   </script>
+
+  <!-- 访客记录与客户端登记弹层 -->
+  <div id="visitorModal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)closeVisitorModal()">
+    <div class="modal-content" style="max-width: 980px; width: 95%; max-height: 90vh; display: flex; flex-direction: column;">
+      <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #e2e8f0; padding-bottom: 12px; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <h2 style="margin: 0; font-size: 18px; color: #2d3748;">👥 访客记录与客户端登记</h2>
+          <select id="visitorDateSelect" onchange="loadVisitorRecords(this.value)" style="padding: 4px 10px; border-radius: 6px; border: 1.5px solid #cbd5e0; font-size: 13px; font-weight: 600; color: #4a5568; outline: none; background: #fff; cursor: pointer;"></select>
+        </div>
+        <button type="button" class="btn btn-secondary" onclick="closeVisitorModal()" style="padding: 4px 10px; font-size: 16px; line-height: 1;">✕</button>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 14px;">
+        <div style="background: #ebf8ff; border: 1px solid #bee3f8; border-radius: 8px; padding: 10px; text-align: center;">
+          <div style="font-size: 11px; color: #2b6cb0; margin-bottom: 4px; font-weight: 500;">今日独立访客</div>
+          <div id="vmTotalCount" style="font-size: 22px; font-weight: bold; color: #2b6cb0;">0</div>
+        </div>
+        <div style="background: #f0fff4; border: 1px solid #c6f6d5; border-radius: 8px; padding: 10px; text-align: center;">
+          <div style="font-size: 11px; color: #276749; margin-bottom: 4px; font-weight: 500;">当前实时在线</div>
+          <div id="vmOnlineCount" style="font-size: 22px; font-weight: bold; color: #276749;">0</div>
+        </div>
+        <div style="background: #faf5ff; border: 1px solid #e9d8fd; border-radius: 8px; padding: 10px; text-align: center;">
+          <div style="font-size: 11px; color: #6b46c1; margin-bottom: 4px; font-weight: 500;">🐻 App客户端</div>
+          <div id="vmAppCount" style="font-size: 22px; font-weight: bold; color: #6b46c1;">0</div>
+        </div>
+        <div style="background: #edf2f7; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px; text-align: center;">
+          <div style="font-size: 11px; color: #4a5568; margin-bottom: 4px; font-weight: 500;">🌐 网页端访客</div>
+          <div id="vmWebCount" style="font-size: 22px; font-weight: bold; color: #4a5568;">0</div>
+        </div>
+      </div>
+
+      <div style="flex: 1; overflow-y: auto; border: 1px solid #e2e8f0; border-radius: 8px;">
+        <table style="width: 100%; border-collapse: collapse; font-size: 12px; text-align: left;">
+          <thead style="background: #f7fafc; position: sticky; top: 0; z-index: 10; border-bottom: 1.5px solid #e2e8f0;">
+            <tr>
+              <th style="padding: 10px 8px; width: 65px;">状态</th>
+              <th style="padding: 10px 8px; width: 140px;">IP 地址</th>
+              <th style="padding: 10px 8px;">客户端标识</th>
+              <th style="padding: 10px 8px; width: 130px;">平台 / 设备</th>
+              <th style="padding: 10px 8px; width: 140px;">身份认证</th>
+              <th style="padding: 10px 8px; width: 140px;">首次/最近活跃</th>
+              <th style="padding: 10px 8px; width: 55px; text-align: center;">频次</th>
+            </tr>
+          </thead>
+          <tbody id="visitorTableBody">
+            <tr>
+              <td colspan="7" style="padding: 30px; text-align: center; color: #a0aec0;">⏳ 加载访客数据中...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 12px; padding-top: 10px; border-top: 1px solid #e2e8f0; flex-wrap: wrap; gap: 8px;">
+        <span style="font-size: 12px; color: #718096;">提示：App 客户端点开秒进，每次打开与心跳均自动登记最新 IP 与客户端标识。</span>
+        <div style="display: flex; gap: 8px;">
+          <button type="button" class="btn btn-secondary" onclick="loadVisitorRecords()">🔄 刷新数据</button>
+          <button type="button" class="btn btn-primary" onclick="closeVisitorModal()">关闭</button>
+        </div>
+      </div>
+    </div>
+  </div>
 </body>
 </html>`;
 }
@@ -5663,6 +6142,8 @@ function renderSharePlayerHTML(song, shortKey, t, s) {
 </body>
 </html>`;
 }
+
+module.exports = server;
 
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);

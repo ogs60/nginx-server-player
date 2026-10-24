@@ -10,6 +10,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.View;
+import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
@@ -87,6 +88,11 @@ public class MainActivity extends AppCompatActivity {
         String originalUa = settings.getUserAgentString();
         settings.setUserAgentString(originalUa + " BearMusicApp/1.0 WebIntoApp");
 
+        // 启用 Cookie 并支持跨域/第三方 Cookie，确保 bear_device 访客标识稳定持久
+        CookieManager cookieManager = CookieManager.getInstance();
+        cookieManager.setAcceptCookie(true);
+        cookieManager.setAcceptThirdPartyCookies(webView, true);
+
         // 注册原生交互 Bridge，用于网页与 Android 系统剪贴板等原生能力交互
         AndroidBridge bridge = new AndroidBridge();
         webView.addJavascriptInterface(bridge, "AndroidBridge");
@@ -124,6 +130,7 @@ public class MainActivity extends AppCompatActivity {
                     layoutError.setVisibility(View.GONE);
                     webView.setVisibility(View.VISIBLE);
                 }
+                CookieManager.getInstance().flush();
             }
 
             @Override
@@ -222,6 +229,12 @@ public class MainActivity extends AppCompatActivity {
             uploadMessageCallback.onReceiveValue(results);
             uploadMessageCallback = null;
         }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        CookieManager.getInstance().flush();
     }
 
     @Override
