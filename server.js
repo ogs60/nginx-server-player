@@ -1687,12 +1687,12 @@ function getHTMLContent(startTime, visitorCount, startDate) {
 
     function shiftLrcTimestamps(lrcText, offsetSeconds) {
       if (!offsetSeconds || Math.abs(offsetSeconds) < 0.001) return lrcText;
-      var lines = lrcText.split('\n');
-      var timeRe = /\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]/g;
+      var lines = lrcText.split('\\n');
+      var timeRe = /\\[(\\d{1,3}):(\\d{2})(?:[.:](\\d{1,3}))?\\]/g;
       return lines.map(function(line) {
         var trimmed = line.trim();
-        if (/^\[[a-z]+:.*\]$/i.test(trimmed)) {
-          if (/^\[offset:\s*([+-]?\d+)\]/i.test(trimmed)) return '';
+        if (/^\\[[a-z]+:.*\\]$/i.test(trimmed)) {
+          if (/^\\[offset:\\s*([+-]?\\d+)\\]/i.test(trimmed)) return '';
           return line;
         }
         return line.replace(timeRe, function(match, m, s, msStr) {
@@ -1719,7 +1719,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
           };
           return '[' + pad(newMin, 2) + ':' + pad(secInt, 2) + '.' + pad(msPart, 2) + ']';
         });
-      }).filter(function(line) { return line !== ''; }).join('\n');
+      }).filter(function(line) { return line !== ''; }).join('\\n');
     }
 
     function saveLyricOffsetPermanent() {
@@ -1784,7 +1784,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
           }
           var meta = document.getElementById('lyricsMeta');
           if (meta && meta.textContent) {
-            meta.textContent = meta.textContent.replace(/\s*\[.*?\]/g, '') + ' [⭐ 已校准保存]';
+            meta.textContent = meta.textContent.replace(/\\s*\\[.*?\\]/g, '') + ' [⭐ 已校准保存]';
           }
 
           // 4. 即时同步当前播放进度
