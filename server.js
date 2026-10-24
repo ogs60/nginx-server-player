@@ -20,15 +20,41 @@ const CACHE_DIR = process.env.CACHE_DIR || '/app/cache';
 const CACHE_META = path.join(CACHE_DIR, 'index.json');
 const VISITOR_META = path.join(CACHE_DIR, 'visitors.json');
 const PORT = Number(process.env.PORT) || 80;
-const YOUTUBE_PROXY = process.env.YOUTUBE_PROXY || '';
-if (YOUTUBE_PROXY) {
-  let proxyUrl;
-  try { proxyUrl = new URL(YOUTUBE_PROXY); } catch { throw new Error('YOUTUBE_PROXY 必须是完整地址，例如 http://192.168.8.100:1088'); }
-  if (!['http:', 'https:', 'socks5:', 'socks5h:'].includes(proxyUrl.protocol) || !proxyUrl.hostname || !proxyUrl.port) {
-    throw new Error('YOUTUBE_PROXY 必须包含协议、地址和端口，例如 http://192.168.8.100:1088');
+const YOUTUBE_COOKIES = process.env.YOUTUBE_COOKIES || '';
+
+function getYouTubeProxy() {
+  const envCandidates = [
+    path.join(__dirname, '.env'),
+    path.join(process.cwd(), '.env'),
+    path.join(CACHE_DIR, '.env'),
+    '/app/.env'
+  ];
+  for (const envFile of envCandidates) {
+    if (fs.existsSync(envFile)) {
+      try {
+        const content = fs.readFileSync(envFile, 'utf8');
+        const match = content.match(/^\s*YOUTUBE_PROXY\s*=\s*(.+)$/m);
+        if (match) {
+          const proxyVal = match[1].trim().replace(/^['"]|['"]$/g, '');
+          if (proxyVal) return proxyVal;
+        }
+      } catch (e) {}
+    }
+  }
+  return process.env.YOUTUBE_PROXY || '';
+}
+
+const initialProxy = getYouTubeProxy();
+if (initialProxy) {
+  try {
+    const proxyUrl = new URL(initialProxy);
+    if (!['http:', 'https:', 'socks5:', 'socks5h:'].includes(proxyUrl.protocol) || !proxyUrl.hostname || !proxyUrl.port) {
+      console.warn('[proxy] YOUTUBE_PROXY 格式可能不完整，建议如 http://192.168.8.100:1088');
+    }
+  } catch (e) {
+    console.warn('[proxy] YOUTUBE_PROXY 解析提示:', e.message);
   }
 }
-const YOUTUBE_COOKIES = process.env.YOUTUBE_COOKIES || '';
 
 function getYouTubeCookiesPath() {
   if (YOUTUBE_COOKIES && fs.existsSync(YOUTUBE_COOKIES)) {
@@ -231,6 +257,8 @@ const server = http.createServer((req, res) => {
     handleLyrics(requestUrl, res);
   } else if (requestUrl.pathname === '/lyrics-delete') {
     handleLyricsDelete(req, res);
+  } else if (requestUrl.pathname === '/lyrics-prefer') {
+    handleLyricsPrefer(req, res);
   } else if (requestUrl.pathname === '/manifest.json') {
     const manifest = {
       name: "熊宝宝的音乐播放器",
@@ -615,6 +643,17 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       color: white !important;
       border-color: #667eea !important;
     }
+    .lyric-btn.is-preferred {
+      background: #fef3c7 !important;
+      color: #b45309 !important;
+      border-color: #f59e0b !important;
+      font-weight: 600 !important;
+    }
+    .lyric-btn.is-preferred:hover {
+      background: #fde68a !important;
+      color: #92400e !important;
+      border-color: #d97706 !important;
+    }
 
     /* 移动端与 App 屏幕响应式适配 */
     @media (max-width: 600px) {
@@ -763,6 +802,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
               <span class="lyrics-meta" id="lyricsMeta"></span>
             </div>
             <div class="lyrics-actions">
+              <button type="button" class="lyric-btn" id="btnLyricPin" onclick="togglePinCurrentLyrics()" title="将当前显示的歌词设为优选歌词（下次优先使用，优先级高于YouTube字幕）" style="display:none;color:#d97706;border-color:#fde68a;">⭐ 优选</button>
               <button type="button" class="lyric-btn" id="btnLyricSearch" onclick="toggleLyricSearch()" title="手动搜索歌词">🔍 搜词</button>
               <button type="button" class="lyric-btn" id="btnOffsetToggle" onclick="toggleOffsetControls()" title="调整歌词时间偏差" style="display:none;">⏱ 校准</button>
               <button type="button" class="lyric-btn" id="btnLyricExpand" onclick="toggleLyricExpand()" title="展开/收起歌词高度">⤢ 展开</button>
@@ -1451,6 +1491,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
     var lyricLines = [];
     var currentLyricIdx = -1;
     var lastLyricsTitle = '';
+    var currentRawLyrics = null;
     var userLyricOffsets = {};
     try { userLyricOffsets = JSON.parse(localStorage.getItem('bear_lyric_offsets') || '{}'); } catch (e) {}
 
@@ -1642,6 +1683,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       lastLyricsTitle = '';
       lyricLines = [];
       currentLyricIdx = -1;
+      currentRawLyrics = null;
       var scroll = document.getElementById('lyricsScroll');
       if (scroll) { scroll.innerHTML = '<div class="lyrics-tip">播放音乐后自动搜索歌词</div>'; scroll.style.transform = ''; }
       var meta = document.getElementById('lyricsMeta');
@@ -1650,6 +1692,8 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       if (btnOffset) { btnOffset.style.display = 'none'; btnOffset.classList.remove('active'); }
       var btnClear = document.getElementById('btnClearLyrics');
       if (btnClear) btnClear.style.display = 'none';
+      var btnPin = document.getElementById('btnLyricPin');
+      if (btnPin) { btnPin.style.display = 'none'; btnPin.classList.remove('is-preferred'); btnPin.textContent = '⭐ 优选'; }
       var offsetRow = document.getElementById('offsetControlsRow');
       if (offsetRow) offsetRow.style.display = 'none';
       var searchRow = document.getElementById('lyricSearchRow');
@@ -1669,6 +1713,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       lastLyricsTitle = title;
       lyricLines = [];
       currentLyricIdx = -1;
+      currentRawLyrics = null;
       updateOffsetDisplay();
       var scroll = document.getElementById('lyricsScroll');
       var meta = document.getElementById('lyricsMeta');
@@ -1676,6 +1721,8 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       if (btnOffset) btnOffset.style.display = 'none';
       var btnClear = document.getElementById('btnClearLyrics');
       if (btnClear) btnClear.style.display = 'none';
+      var btnPin = document.getElementById('btnLyricPin');
+      if (btnPin) { btnPin.style.display = 'none'; btnPin.classList.remove('is-preferred'); btnPin.textContent = '⭐ 优选'; }
       var offsetRow = document.getElementById('offsetControlsRow');
       if (offsetRow) offsetRow.style.display = 'none';
       if (scroll) scroll.innerHTML = '<div class="lyrics-tip">搜索歌词中: ' + escapeHtml(title) + ' ...</div>';
@@ -1691,33 +1738,67 @@ function getHTMLContent(startTime, visitorCount, startDate) {
         .then(function(r) { return r.json(); })
         .then(function(data) {
           if (data.lyrics && data.synced) {
+            currentRawLyrics = data.lyrics;
             lyricLines = parseLrc(data.lyrics);
             renderLyricLines(lyricLines);
             var sourceNames = {
+              'preferred': '⭐ 优选歌词',
               'youtube-subtitles': 'YouTube字幕',
               'local-cache': '本地歌词',
               'kugou': '酷狗/QQ音乐',
               'netease': '网易云音乐',
               'lrclib': 'LRCLIB'
             };
-            var tag = data.source ? ' [' + (sourceNames[data.source] || data.source) + ']' : '';
+            var isPref = Boolean(data.source === 'preferred' || data.isPreferred);
+            var tag = isPref ? ' [⭐ 优选歌词]' : (data.source ? ' [' + (sourceNames[data.source] || data.source) + ']' : '');
             if (meta) meta.textContent = (data.artistName ? data.artistName + ' · ' : '') + (data.trackName || '') + tag;
             if (btnOffset) btnOffset.style.display = 'inline-flex';
             if (btnClear) btnClear.style.display = 'inline-flex';
+            if (btnPin) {
+              btnPin.style.display = 'inline-flex';
+              if (isPref) {
+                btnPin.textContent = '★ 已优选';
+                btnPin.classList.add('is-preferred');
+                btnPin.title = '当前歌词为手动优选歌词（点击可取消优选）';
+              } else {
+                btnPin.textContent = '⭐ 优选';
+                btnPin.classList.remove('is-preferred');
+                btnPin.title = '将当前歌词设为优选歌词（优先级最高，下次优先使用）';
+              }
+            }
             if (currentPlayer) updateLyricSync(currentPlayer.currentTime);
           } else if (data.lyrics) {
+            currentRawLyrics = data.lyrics;
             if (scroll) scroll.innerHTML = '<div style="padding:10px;font-size:13px;color:#888;text-align:center;white-space:pre-line;line-height:2;max-height:240px;overflow:auto">' + escapeHtml(data.lyrics.substring(0, 1000)) + '</div>';
-            if (meta) meta.textContent = '纯文本歌词';
+            var isPref = Boolean(data.source === 'preferred' || data.isPreferred);
+            var tag = isPref ? ' [⭐ 优选歌词]' : '';
+            if (meta) meta.textContent = '纯文本歌词' + tag;
             if (btnOffset) btnOffset.style.display = 'none';
             if (btnClear) btnClear.style.display = 'inline-flex';
+            if (btnPin) {
+              btnPin.style.display = 'inline-flex';
+              if (isPref) {
+                btnPin.textContent = '★ 已优选';
+                btnPin.classList.add('is-preferred');
+                btnPin.title = '当前歌词为手动优选歌词（点击可取消优选）';
+              } else {
+                btnPin.textContent = '⭐ 优选';
+                btnPin.classList.remove('is-preferred');
+                btnPin.title = '将当前歌词设为优选歌词（优先级最高，下次优先使用）';
+              }
+            }
           } else {
+            currentRawLyrics = null;
             if (scroll) scroll.innerHTML = '<div class="lyrics-tip">未找到歌词，可点击右上角 🔍 搜词尝试手动搜索</div>';
             if (btnOffset) btnOffset.style.display = 'none';
             if (btnClear) btnClear.style.display = 'none';
+            if (btnPin) btnPin.style.display = 'none';
           }
         })
         .catch(function() {
+          currentRawLyrics = null;
           if (scroll) scroll.innerHTML = '<div class="lyrics-tip">歌词加载失败，请重试</div>';
+          if (btnPin) btnPin.style.display = 'none';
         });
     }
 
@@ -1727,7 +1808,7 @@ function getHTMLContent(startTime, visitorCount, startDate) {
         alert('当前没有可清除歌词的歌曲');
         return;
       }
-      if (!confirm('确定清除「' + currentItem.name + '」的已缓存歌词吗？\\n清除后您可以点击「🔍 搜词」手动重新搜索。')) return;
+      if (!confirm('确定清除「' + currentItem.name + '」的已缓存歌词吗？\n清除后您可以点击「🔍 搜词」手动重新搜索。')) return;
 
       try {
         for (var storageKey in localStorage) {
@@ -1756,6 +1837,76 @@ function getHTMLContent(startTime, visitorCount, startDate) {
       .catch(function(err) {
         showToast('清除网络错误: ' + err.message, true);
       });
+    }
+
+    function togglePinCurrentLyrics() {
+      var currentItem = (currentIndex >= 0 && playlistItems[currentIndex]) ? playlistItems[currentIndex] : null;
+      if (!currentItem || !currentItem.key) {
+        showToast('当前没有正在播放的歌曲', true);
+        return;
+      }
+      if (!currentRawLyrics) {
+        showToast('当前无可用歌词可设为优选', true);
+        return;
+      }
+
+      var btn = document.getElementById('btnLyricPin');
+      var isPref = btn && btn.classList.contains('is-preferred');
+
+      if (isPref) {
+        if (!confirm('当前歌词已是优选歌词。确定要取消优选吗？\n取消后下次将恢复默认检索规则。')) return;
+        fetch('/lyrics-prefer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key: currentItem.key, action: 'unset' })
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          if (data.success) {
+            showToast('已取消优选歌词');
+            if (btn) {
+              btn.textContent = '⭐ 优选';
+              btn.classList.remove('is-preferred');
+              btn.title = '将当前歌词设为优选歌词（优先级最高，下次优先使用）';
+            }
+            var meta = document.getElementById('lyricsMeta');
+            if (meta && meta.textContent) {
+              meta.textContent = meta.textContent.replace(/\s*\[⭐\s*优选歌词\]/g, '');
+            }
+          } else {
+            showToast('取消失败: ' + (data.error || '未知错误'), true);
+          }
+        })
+        .catch(function(e) { showToast('操作网络错误: ' + e.message, true); });
+      } else {
+        fetch('/lyrics-prefer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            key: currentItem.key,
+            lyrics: currentRawLyrics,
+            action: 'set'
+          })
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          if (data.success) {
+            showToast('⭐ 已设为优选歌词！下次将优先使用此歌词');
+            if (btn) {
+              btn.textContent = '★ 已优选';
+              btn.classList.add('is-preferred');
+              btn.title = '当前歌词为手动优选歌词（点击可取消优选）';
+            }
+            var meta = document.getElementById('lyricsMeta');
+            if (meta && meta.textContent) {
+              meta.textContent = meta.textContent.replace(/\s*\[.*?\]/g, '') + ' [⭐ 优选歌词]';
+            }
+          } else {
+            showToast('保存失败: ' + (data.error || '未知错误'), true);
+          }
+        })
+        .catch(function(e) { showToast('保存网络错误: ' + e.message, true); });
+      }
     }
 
     audioPlayer.addEventListener('timeupdate', function() { updateLyricSync(audioPlayer.currentTime); });
@@ -3043,7 +3194,8 @@ async function handleGetAudioUrl(req, res) {
         ];
         const cookiesPath = getYouTubeCookiesPath();
         if (cookiesPath) ytArgs.unshift('--cookies', cookiesPath);
-        if (YOUTUBE_PROXY) ytArgs.unshift('--proxy', YOUTUBE_PROXY);
+        const curProxy = getYouTubeProxy();
+        if (curProxy) ytArgs.unshift('--proxy', curProxy);
         ytArgs.push(inputUrl);
         const { stdout } = await execFileAsync('yt-dlp', ytArgs, { timeout: 70000 });
         title = stdout.trim().split('\n').filter(Boolean).pop() || '';
@@ -3121,7 +3273,8 @@ function startDownload(inputUrl, key, cachePath, format) {
     }
     const cookiesPath = getYouTubeCookiesPath();
     if (cookiesPath) ytArgs.unshift('--cookies', cookiesPath);
-    if (YOUTUBE_PROXY) ytArgs.unshift('--proxy', YOUTUBE_PROXY);
+    const curProxy = getYouTubeProxy();
+    if (curProxy) ytArgs.unshift('--proxy', curProxy);
     let attempts = 0;
     const run = () => {
       attempts++;
@@ -3477,13 +3630,18 @@ function getLocalLrcInfo(key, preferredSource = null) {
     }
   }
 
-  // 1. 如果指定了首选来源（例如 'ytb'）
+  // 1. 如果指定了首选来源（例如 'pref' 或 'ytb'）
   if (preferredSource) {
     const p = path.join(CACHE_DIR, `${fullKey}.${preferredSource}.lrc`);
     if (fs.existsSync(p)) {
       try {
         const c = fs.readFileSync(p, 'utf8').trim();
-        if (c) return { lyrics: c, source: preferredSource === 'ytb' ? 'youtube-subtitles' : preferredSource };
+        if (c) {
+          let srcName = preferredSource;
+          if (preferredSource === 'pref') srcName = 'preferred';
+          else if (preferredSource === 'ytb') srcName = 'youtube-subtitles';
+          return { lyrics: c, source: srcName, isPreferred: preferredSource === 'pref' };
+        }
       } catch {}
     }
     // 兼容检查旧版单个 .lrc 文件如果是 ytb 来源
@@ -3501,14 +3659,19 @@ function getLocalLrcInfo(key, preferredSource = null) {
     return null;
   }
 
-  // 2. 严格按优先级检查本地文件: ytb (YouTube原生字幕最高) -> kugou -> netease -> lrclib
-  const candidateSources = ['ytb', 'kugou', 'netease', 'lrclib'];
+  // 2. 严格按优先级检查本地文件: pref (用户手动优选最高) -> ytb (YouTube原生字幕) -> kugou -> netease -> lrclib
+  const candidateSources = ['pref', 'ytb', 'kugou', 'netease', 'lrclib'];
   for (const src of candidateSources) {
     const p = path.join(CACHE_DIR, `${fullKey}.${src}.lrc`);
     if (fs.existsSync(p)) {
       try {
         const c = fs.readFileSync(p, 'utf8').trim();
-        if (c) return { lyrics: c, source: src === 'ytb' ? 'youtube-subtitles' : src };
+        if (c) {
+          let srcName = src;
+          if (src === 'pref') srcName = 'preferred';
+          else if (src === 'ytb') srcName = 'youtube-subtitles';
+          return { lyrics: c, source: srcName, isPreferred: src === 'pref' };
+        }
       } catch {}
     }
   }
@@ -3568,9 +3731,10 @@ function saveLocalLrcContent(key, lyrics, source = 'ytb', inputUrl = null) {
     if (matched) fullKey = matched;
   }
 
-  // 区分不同平台后缀：.ytb.lrc, .kugou.lrc, .netease.lrc, .lrclib.lrc
+  // 区分不同平台后缀：.pref.lrc, .ytb.lrc, .kugou.lrc, .netease.lrc, .lrclib.lrc
   let extSuffix = 'ytb';
-  if (source === 'youtube-subtitles' || source === 'ytb') extSuffix = 'ytb';
+  if (source === 'preferred' || source === 'pref') extSuffix = 'pref';
+  else if (source === 'youtube-subtitles' || source === 'ytb') extSuffix = 'ytb';
   else if (source === 'kugou') extSuffix = 'kugou';
   else if (source === 'netease') extSuffix = 'netease';
   else if (source === 'lrclib') extSuffix = 'lrclib';
@@ -3579,8 +3743,8 @@ function saveLocalLrcContent(key, lyrics, source = 'ytb', inputUrl = null) {
   const targetLrc = path.join(CACHE_DIR, `${fullKey}.${extSuffix}.lrc`);
   try {
     fs.writeFileSync(targetLrc, lyrics, 'utf8');
-    // 如果是 YouTube 原生字幕，同时写一份到 <key>.lrc 作为基准，防止被国内平台覆盖
-    if (extSuffix === 'ytb') {
+    // 如果是优选歌词或 YouTube 原生字幕，同时写一份到 <key>.lrc 作为基准，防止被国内平台覆盖
+    if (extSuffix === 'pref' || extSuffix === 'ytb') {
       try { fs.writeFileSync(path.join(CACHE_DIR, `${fullKey}.lrc`), lyrics, 'utf8'); } catch {}
     }
   } catch (e) {
@@ -3600,7 +3764,7 @@ function saveLocalLrcContent(key, lyrics, source = 'ytb', inputUrl = null) {
       if (k && k !== fullKey) {
         try {
           fs.writeFileSync(path.join(CACHE_DIR, `${k}.${extSuffix}.lrc`), lyrics, 'utf8');
-          if (extSuffix === 'ytb') {
+          if (extSuffix === 'pref' || extSuffix === 'ytb') {
             fs.writeFileSync(path.join(CACHE_DIR, `${k}.lrc`), lyrics, 'utf8');
           }
         } catch {}
@@ -3611,7 +3775,113 @@ function saveLocalLrcContent(key, lyrics, source = 'ytb', inputUrl = null) {
   }
 }
 
-async function fetchYouTubeSubtitles(inputUrl, key) {
+function containsChinese(text) {
+  if (!text || typeof text !== 'string') return false;
+  return /[\u4e00-\u9fa5]/.test(text);
+}
+
+async function translateLrcToChinese(lrcText) {
+  if (!lrcText || typeof lrcText !== 'string') return lrcText;
+  const lines = lrcText.split('\n');
+  const lineItems = [];
+  const textsToTranslate = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const rawLine = lines[i];
+    const match = rawLine.match(/^(\[\d{1,3}:\d{2}(?:\.\d{1,3})?\])(.*)$/);
+    if (match) {
+      const tag = match[1];
+      const text = match[2].trim();
+      lineItems.push({ isLyric: true, tag, text, raw: rawLine });
+      if (text && !containsChinese(text)) {
+        textsToTranslate.push({ index: lineItems.length - 1, text });
+      }
+    } else {
+      lineItems.push({ isLyric: false, raw: rawLine });
+    }
+  }
+
+  if (textsToTranslate.length === 0) return lrcText;
+
+  const CHUNK_SIZE = 25;
+  for (let i = 0; i < textsToTranslate.length; i += CHUNK_SIZE) {
+    const chunk = textsToTranslate.slice(i, i + CHUNK_SIZE);
+    const combined = chunk.map(item => item.text).join('\n');
+    try {
+      const trRes = await fetchJson(
+        'https://api.mymemory.translated.net/get?q=' + encodeURIComponent(combined) + '&langpair=autodetect|zh-CN',
+        6000
+      );
+      if (trRes && trRes.responseData && trRes.responseData.translatedText) {
+        const translatedParts = trRes.responseData.translatedText.split('\n');
+        for (let j = 0; j < chunk.length; j++) {
+          if (translatedParts[j] && translatedParts[j].trim()) {
+            lineItems[chunk[j].index].text = translatedParts[j].trim();
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[lyrics] translate chunk notice:', e.message);
+    }
+  }
+
+  return lineItems.map(item => item.isLyric ? `${item.tag}${item.text}` : item.raw).join('\n');
+}
+
+async function ensureChineseLyrics(lrcText, rawTitle, key, targetYtUrl) {
+  if (lrcText && containsChinese(lrcText)) return lrcText;
+
+  let cleanTitle = '';
+  if (rawTitle) {
+    cleanTitle = cleanSongTitle(rawTitle) || rawTitle;
+  } else if (key) {
+    const metadata = readCacheMetadata();
+    const item = metadata[key] || (key.length < 64 && Object.values(metadata).find(m => m.key && m.key.startsWith(key)));
+    if (item && item.title) {
+      cleanTitle = cleanSongTitle(item.title) || item.title;
+    }
+  }
+
+  if (cleanTitle && !cleanTitle.startsWith('缓存歌曲') && !/^https?:\/\//i.test(cleanTitle)) {
+    try {
+      const kgRes = await searchKugouLyrics(cleanTitle, rawTitle);
+      if (kgRes && kgRes.lyrics && containsChinese(kgRes.lyrics)) {
+        console.log(`[lyrics] Kugou Chinese lyrics matched for "${cleanTitle}"`);
+        if (key) saveLocalLrcContent(key, kgRes.lyrics, 'ytb', targetYtUrl);
+        return kgRes.lyrics;
+      }
+    } catch (e) {
+      console.warn('[lyrics] Kugou fallback error:', e.message);
+    }
+
+    try {
+      const wyRes = await searchNeteaseLyrics(cleanTitle);
+      if (wyRes && wyRes.lyrics && containsChinese(wyRes.lyrics)) {
+        console.log(`[lyrics] Netease Chinese lyrics matched for "${cleanTitle}"`);
+        if (key) saveLocalLrcContent(key, wyRes.lyrics, 'ytb', targetYtUrl);
+        return wyRes.lyrics;
+      }
+    } catch (e) {
+      console.warn('[lyrics] Netease fallback error:', e.message);
+    }
+  }
+
+  if (lrcText && lrcText.trim()) {
+    try {
+      const tr = await translateLrcToChinese(lrcText);
+      if (tr && containsChinese(tr)) {
+        if (key) saveLocalLrcContent(key, tr, 'ytb', targetYtUrl);
+        return tr;
+      }
+    } catch (e) {
+      console.warn('[lyrics] Translation fallback error:', e.message);
+    }
+  }
+
+  return lrcText || null;
+}
+
+async function fetchYouTubeSubtitles(inputUrl, key, songTitle = '') {
   if (!validateYouTubeUrl(inputUrl)) return null;
   if (hasNoSubMarker(key)) return null;
 
@@ -3623,14 +3893,15 @@ async function fetchYouTubeSubtitles(inputUrl, key) {
     '--skip-download',
     '--write-subs',
     '--write-auto-subs',
-    '--sub-langs', 'zh-Hans,zh-CN,zh,zh-Hant,zh-TW,zh-HK,en',
+    '--sub-langs', 'zh-Hans,zh-CN,zh,zh-Hant,zh-TW,zh-HK,zh-SG,zh-Hans.*,zh-Hant.*,zh.*',
     '--sub-format', 'vtt/srt/best',
     '-o', `${tempPrefix}.%(ext)s`
   ];
 
   const cookiesPath = getYouTubeCookiesPath();
   if (cookiesPath) ytArgs.unshift('--cookies', cookiesPath);
-  if (YOUTUBE_PROXY) ytArgs.unshift('--proxy', YOUTUBE_PROXY);
+  const curProxy = getYouTubeProxy();
+  if (curProxy) ytArgs.unshift('--proxy', curProxy);
   ytArgs.push(inputUrl);
 
   try {
@@ -3650,24 +3921,29 @@ async function fetchYouTubeSubtitles(inputUrl, key) {
 
   if (!subFiles.length) return null;
 
-  const langPriority = ['zh-Hans', 'zh-CN', 'zh', 'zh-Hant', 'zh-TW', 'zh-HK', 'en'];
-  subFiles.sort((a, b) => {
-    const getScore = (name) => {
-      for (let i = 0; i < langPriority.length; i++) {
-        if (name.includes(langPriority[i])) return i;
-      }
-      return 999;
-    };
-    return getScore(a) - getScore(b);
-  });
+  // 严格只筛选中文字幕（简体/繁体/粤语），坚决过滤掉英文字幕等外文字幕
+  const zhFiles = subFiles.filter(f => /(zh-Hans|zh-CN|zh-Hant|zh-TW|zh-HK|zh-SG|\.zh|\.yue)/i.test(f));
 
-  const bestFile = path.join(CACHE_DIR, subFiles[0]);
   let lrcText = null;
-  try {
-    const content = fs.readFileSync(bestFile, 'utf8');
-    lrcText = convertVttOrSrtToLrc(content);
-  } catch (e) {
-    console.warn('[lyrics] Failed to read subtitle file:', e.message);
+  if (zhFiles.length > 0) {
+    const langPriority = ['zh-Hans', 'zh-CN', 'zh', 'zh-Hant', 'zh-TW', 'zh-HK', 'zh-SG'];
+    zhFiles.sort((a, b) => {
+      const getScore = (name) => {
+        for (let i = 0; i < langPriority.length; i++) {
+          if (name.includes(langPriority[i])) return i;
+        }
+        return 999;
+      };
+      return getScore(a) - getScore(b);
+    });
+
+    const bestFile = path.join(CACHE_DIR, zhFiles[0]);
+    try {
+      const content = fs.readFileSync(bestFile, 'utf8');
+      lrcText = convertVttOrSrtToLrc(content);
+    } catch (e) {
+      console.warn('[lyrics] Failed to read subtitle file:', e.message);
+    }
   }
 
   for (const f of subFiles) {
@@ -3675,10 +3951,18 @@ async function fetchYouTubeSubtitles(inputUrl, key) {
   }
 
   if (lrcText && lrcText.trim()) {
-    const formattedLrc = `[source:youtube-subtitles]\n${lrcText.trim()}`;
-    saveLocalLrcContent(key, formattedLrc, 'ytb', inputUrl);
-    console.log(`[lyrics] Saved YouTube subtitle (${key.slice(0, 10)}.ytb.lrc, ${lrcText.split('\n').length} lines)`);
-    return formattedLrc;
+    if (containsChinese(lrcText)) {
+      const formattedLrc = `[source:youtube-subtitles]\n${lrcText.trim()}`;
+      saveLocalLrcContent(key, formattedLrc, 'ytb', inputUrl);
+      console.log(`[lyrics] Saved YouTube Chinese subtitle (${key.slice(0, 10)}.ytb.lrc, ${lrcText.split('\n').length} lines)`);
+      return formattedLrc;
+    } else {
+      console.log(`[lyrics] Downloaded subtitle for ${key.slice(0, 10)} has no Chinese. Converting to Chinese...`);
+      const converted = await ensureChineseLyrics(lrcText, songTitle, key, inputUrl);
+      if (converted && containsChinese(converted)) {
+        return converted;
+      }
+    }
   }
 
   return null;
@@ -3693,27 +3977,58 @@ async function handleLyrics(url, res) {
 
   const targetYtUrl = (songUrl && validateYouTubeUrl(songUrl)) ? songUrl : getYouTubeUrlByKey(key);
 
-  // 1. 默认第一优先级：只要本地存在 ytb 字幕，无论任何情况（除搜词框显式强制搜词 force=1 且 manual=1 外），必须优先返回 YouTube 原生字幕
+  // 0. 最高优先级：手动优选歌词 (.pref.lrc)，只要用户曾设为优选，权限高于 ytb 和所有平台
   if (!(force && manual) && key) {
-    const localYtb = getLocalLrcInfo(key, 'ytb');
-    if (localYtb) {
+    const localPref = getLocalLrcInfo(key, 'pref');
+    if (localPref) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
-        lyrics: localYtb.lyrics,
+        lyrics: localPref.lyrics,
         synced: true,
         trackName: rawTitle,
-        source: 'youtube-subtitles'
+        source: 'preferred',
+        isPreferred: true
       }));
       return;
     }
   }
 
-  // 2. 如果本地没有 ytb 字幕，且该歌曲来自 YouTube 且未被用户清词禁用（除显式强制搜词外）：
-  //    先去 ytb 下载字幕，下载成功保存为 <key>.ytb.lrc
+  // 1. 第二优先级：只要本地存在 ytb 字幕，优先返回 YouTube 原生中文字幕
+  if (!(force && manual) && key) {
+    const localYtb = getLocalLrcInfo(key, 'ytb');
+    if (localYtb) {
+      if (containsChinese(localYtb.lyrics)) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          lyrics: localYtb.lyrics,
+          synced: true,
+          trackName: rawTitle,
+          source: 'youtube-subtitles'
+        }));
+        return;
+      } else {
+        // 发现历史缓存是非中文字幕（如之前的英文字幕），自动触发转换并更新缓存
+        console.log(`[lyrics] Cached ytb subtitle for ${key.slice(0, 10)} is non-Chinese. Converting to Chinese...`);
+        const converted = await ensureChineseLyrics(localYtb.lyrics, rawTitle, key, targetYtUrl);
+        if (converted && containsChinese(converted)) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            lyrics: converted,
+            synced: true,
+            trackName: rawTitle,
+            source: 'youtube-subtitles'
+          }));
+          return;
+        }
+      }
+    }
+  }
+
+  // 2. 第三优先级：去 YouTube 下载原生中文字幕
   if (!(force && manual) && targetYtUrl && !hasNoSubMarker(key)) {
     const ytKey = key || getYouTubeCacheKey(targetYtUrl, 'mp3');
     try {
-      const ytLrc = await fetchYouTubeSubtitles(targetYtUrl, ytKey);
+      const ytLrc = await fetchYouTubeSubtitles(targetYtUrl, ytKey, rawTitle);
       if (ytLrc) {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
@@ -3729,11 +4044,10 @@ async function handleLyrics(url, res) {
     }
   }
 
-  // 3. 如果 ytb 下载字幕失败，或非 YouTube 歌曲：
-  //    检查本地是否已有国内平台之前下载的歌词缓存 (<key>.kugou.lrc, <key>.netease.lrc, <key>.lrclib.lrc)
+  // 3. 第四优先级：本地其他平台已缓存歌词 (kugou, netease, lrclib)
   if (!(force && manual) && key) {
     const localOther = getLocalLrcInfo(key);
-    if (localOther) {
+    if (localOther && containsChinese(localOther.lyrics)) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         lyrics: localOther.lyrics,
@@ -3745,7 +4059,7 @@ async function handleLyrics(url, res) {
     }
   }
 
-  // 4. 本地均无可用歌词，或用户手动搜词：去国内平台（酷狗/QQ -> 网易云 -> lrclib）检索
+  // 4. 第五优先级：在线国内曲库检索 (酷狗 -> 网易云 -> lrclib)
   if (!rawTitle) {
     res.writeHead(400, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'title required' }));
@@ -3771,6 +4085,12 @@ async function handleLyrics(url, res) {
   // 3. 备用：lrclib.net（外文/欧美歌曲）
   if (!result) {
     result = await searchLrclibLyrics(cleanTitle);
+    if (result && result.lyrics && !containsChinese(result.lyrics)) {
+      try {
+        const tr = await translateLrcToChinese(result.lyrics);
+        if (tr && containsChinese(tr)) result.lyrics = tr;
+      } catch (e) {}
+    }
   }
 
   if (result && result.lyrics) {
@@ -3853,6 +4173,63 @@ function handleLyricsDelete(req, res) {
     } catch (e) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: false, error: e.message }));
+    }
+  });
+}
+
+function handleLyricsPrefer(req, res) {
+  let body = '';
+  let bodySize = 0;
+  const MAX_BODY = 128 * 1024;
+  req.on('data', chunk => {
+    bodySize += chunk.length;
+    if (bodySize > MAX_BODY) { req.destroy(); return; }
+    body += chunk;
+  });
+  req.on('end', () => {
+    try {
+      const data = JSON.parse(body || '{}');
+      const key = String(data.key || '').trim();
+      const lyrics = String(data.lyrics || '').trim();
+      const action = String(data.action || 'set').trim();
+
+      if (!key || !/^[a-f0-9]{8,64}$/i.test(key)) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: '无效的歌曲标识' }));
+        return;
+      }
+
+      let fullKey = key;
+      const metadata = readCacheMetadata();
+      if (key.length < 64) {
+        const matched = Object.keys(metadata).find(k => k.startsWith(key));
+        if (matched) fullKey = matched;
+      }
+
+      if (action === 'unset') {
+        const prefPath = path.join(CACHE_DIR, `${fullKey}.pref.lrc`);
+        if (fs.existsSync(prefPath)) {
+          try { fs.unlinkSync(prefPath); } catch {}
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, action: 'unset' }));
+        return;
+      }
+
+      if (!lyrics) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: '歌词内容不能为空' }));
+        return;
+      }
+
+      saveLocalLrcContent(fullKey, lyrics, 'pref');
+      console.log(`[lyrics] Set preferred lyrics for ${fullKey.slice(0, 10)}`);
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, isPreferred: true }));
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
     }
   });
 }
