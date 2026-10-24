@@ -2404,7 +2404,7 @@ function getManageHTMLContent() {
         });
     }
 
-    function renderSongs() {
+    function renderSongs(highlightKey) {
       const container = document.getElementById('songList');
       const kw = (document.getElementById('searchKeyword').value || '').trim().toLowerCase();
       
