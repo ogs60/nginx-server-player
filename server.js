@@ -1108,7 +1108,7 @@ function getHTMLContent(startTime, visitorCount, startDate, isApp = false) {
             <button type="button" class="lyric-btn" id="btnSaveOffset" onclick="saveLyricOffsetPermanent()" title="将校准时间永久保存到服务器，下次播放无需重新校准" style="color:#15803d;border-color:#86efac;font-weight:bold;background:#f0fdf4;opacity:0.6;">💾 保存</button>
           </div>
           <div id="lyricSearchRow" style="display:none;align-items:center;gap:6px;margin-bottom:8px;">
-            <input type="text" id="manualLyricInput" class="url-input" style="margin-bottom:0;padding:4px 8px;font-size:12px;height:28px;flex:1;" placeholder="输入正确的 歌名 歌手 重新搜索" onkeydown="if(event.key==='Enter')submitManualLyrics()">
+            <input type="text" id="manualLyricInput" class="url-input" style="margin-bottom:0;padding:4px 8px;font-size:12px;height:28px;flex:1;" placeholder="输入正确的 歌名 歌手 重新搜索" onkeydown="if(event.key==='Enter' && !event.isComposing)submitManualLyrics()">
             <button type="button" class="lyric-btn" onclick="submitManualLyrics()" style="padding:0 10px;height:28px;background:#667eea;color:#fff;border-color:#667eea;">确定</button>
             <button type="button" class="lyric-btn" onclick="toggleLyricSearch()" style="padding:0 8px;height:28px;">取消</button>
           </div>
@@ -1118,7 +1118,14 @@ function getHTMLContent(startTime, visitorCount, startDate, isApp = false) {
             </div>
           </div>
         </div>
-        <div id="playlist" style="background:#fff;padding:10px;border-radius:4px;margin-bottom:15px;font-size:13px;color:#555;display:none;"></div>
+        <div id="playlist" style="background:#fff;padding:10px;border-radius:4px;margin-bottom:15px;font-size:13px;color:#555;display:none;">
+          <div id="playlistSearchWrap" style="margin-bottom:10px;position:relative;display:flex;align-items:center;">
+            <input type="text" id="playlistSearchInput" placeholder="🔍 搜索播放列表歌曲 (歌名/歌手)..." style="width:100%;box-sizing:border-box;padding:7px 28px 7px 12px;font-size:12px;border:1px solid #ddd;border-radius:4px;outline:none;">
+            <span id="playlistSearchClear" onclick="clearPlaylistSearch()" style="position:absolute;right:8px;cursor:pointer;color:#999;font-size:14px;display:none;user-select:none;padding:2px 4px;" title="清空搜索">✕</span>
+          </div>
+          <div id="playlistItems"></div>
+          <div id="playlistFooter"></div>
+        </div>
         <div id="uploadSection" class="upload-section"${isApp ? ' style="display:none;"' : ''}>
           <div class="loading" id="loading">⏳ 正在获取音频链接...</div>
           <div class="progress-wrap" id="progressWrap">
@@ -1258,14 +1265,20 @@ function getHTMLContent(startTime, visitorCount, startDate, isApp = false) {
       renderPlaylist();
     }
 
+    function getFilteredPlaylist() {
+      const kw = playlistSearchKeyword;
+      return playlistItems.map((item, index) => ({ item, index })).filter(entry => {
+        if (!kw) return true;
+        const name = (entry.item.name || '').toLowerCase();
+        const parts = kw.split(/\s+/).filter(Boolean);
+        return parts.every(p => name.includes(p));
+      });
+    }
+
     function jumpToPlaylistPageInput(val) {
       const page = parseInt(val, 10);
       if (!isNaN(page)) {
-        const kw = playlistSearchKeyword;
-        const filtered = playlistItems.map((item, index) => ({ item, index })).filter(entry => {
-          if (!kw) return true;
-          return (entry.item.name || '').toLowerCase().includes(kw);
-        });
+        const filtered = getFilteredPlaylist();
         const totalPages = Math.ceil(filtered.length / playlistPageSize) || 1;
         if (page >= 1 && page <= totalPages) {
           playlistPage = page;
@@ -1274,28 +1287,78 @@ function getHTMLContent(startTime, visitorCount, startDate, isApp = false) {
       }
     }
 
+    let isPlaylistSearchComposing = false;
+
+    function initPlaylistSearchEvents() {
+      const input = document.getElementById('playlistSearchInput');
+      if (!input || input.__boundEvents) return;
+      input.__boundEvents = true;
+
+      input.addEventListener('compositionstart', function() {
+        isPlaylistSearchComposing = true;
+      });
+
+      input.addEventListener('compositionend', function(e) {
+        isPlaylistSearchComposing = false;
+        onPlaylistSearch(e.target.value);
+      });
+
+      input.addEventListener('input', function(e) {
+        if (!isPlaylistSearchComposing) {
+          onPlaylistSearch(e.target.value);
+        }
+      });
+    }
+
     function onPlaylistSearch(val) {
-      playlistSearchKeyword = (val || '').trim().toLowerCase();
+      const kw = (val || '').trim().toLowerCase();
+      const clearBtn = document.getElementById('playlistSearchClear');
+      if (clearBtn) {
+        clearBtn.style.display = (val || '').trim() ? 'inline-block' : 'none';
+      }
+      if (kw === playlistSearchKeyword) return;
+      playlistSearchKeyword = kw;
       playlistPage = 1;
       renderPlaylist();
+    }
+
+    function clearPlaylistSearch() {
       const input = document.getElementById('playlistSearchInput');
-      if (input) {
-        input.focus();
-        input.selectionStart = input.selectionEnd = input.value.length;
-      }
+      if (input) input.value = '';
+      const clearBtn = document.getElementById('playlistSearchClear');
+      if (clearBtn) clearBtn.style.display = 'none';
+      playlistSearchKeyword = '';
+      playlistPage = 1;
+      renderPlaylist();
+      if (input) input.focus();
     }
 
     function renderPlaylist() {
       playlist.style.display = playlistItems.length ? 'block' : 'none';
       if (!playlistItems.length) {
-        playlist.innerHTML = '';
+        const itemsContainer = document.getElementById('playlistItems');
+        if (itemsContainer) itemsContainer.innerHTML = '';
+        const footerContainer = document.getElementById('playlistFooter');
+        if (footerContainer) footerContainer.innerHTML = '';
         return;
       }
-      const kw = playlistSearchKeyword;
-      const filtered = playlistItems.map((item, index) => ({ item, index })).filter(entry => {
-        if (!kw) return true;
-        return (entry.item.name || '').toLowerCase().includes(kw);
-      });
+
+      let itemsContainer = document.getElementById('playlistItems');
+      let footerContainer = document.getElementById('playlistFooter');
+      if (!itemsContainer || !footerContainer) {
+        playlist.innerHTML = '<div id="playlistSearchWrap" style="margin-bottom:10px;position:relative;display:flex;align-items:center;">' +
+          '<input type="text" id="playlistSearchInput" placeholder="🔍 搜索播放列表歌曲 (歌名/歌手)..." style="width:100%;box-sizing:border-box;padding:7px 28px 7px 12px;font-size:12px;border:1px solid #ddd;border-radius:4px;outline:none;">' +
+          '<span id="playlistSearchClear" onclick="clearPlaylistSearch()" style="position:absolute;right:8px;cursor:pointer;color:#999;font-size:14px;display:none;user-select:none;padding:2px 4px;" title="清空搜索">✕</span>' +
+          '</div>' +
+          '<div id="playlistItems"></div>' +
+          '<div id="playlistFooter"></div>';
+        itemsContainer = document.getElementById('playlistItems');
+        footerContainer = document.getElementById('playlistFooter');
+      }
+
+      initPlaylistSearchEvents();
+
+      const filtered = getFilteredPlaylist();
 
       const totalPages = Math.ceil(filtered.length / playlistPageSize) || 1;
       if (playlistPage > totalPages) playlistPage = totalPages;
@@ -1304,10 +1367,6 @@ function getHTMLContent(startTime, visitorCount, startDate, isApp = false) {
       const startIndex = (playlistPage - 1) * playlistPageSize;
       const endIndex = Math.min(startIndex + playlistPageSize, filtered.length);
       const pageEntries = filtered.slice(startIndex, endIndex);
-
-      const headerHtml = '<div style="margin-bottom:10px;">' +
-        '<input type="text" id="playlistSearchInput" placeholder="🔍 搜索播放列表歌曲 (歌名/歌手)..." oninput="onPlaylistSearch(this.value)" value="' + escapeHtml(playlistSearchKeyword) + '" style="width:100%;box-sizing:border-box;padding:7px 12px;font-size:12px;border:1px solid #ddd;border-radius:4px;outline:none;">' +
-        '</div>';
 
       const itemsHtml = pageEntries.length ? pageEntries.map(entry => {
         const item = entry.item;
@@ -1360,7 +1419,8 @@ function getHTMLContent(startTime, visitorCount, startDate, isApp = false) {
         }
       }
 
-      playlist.innerHTML = headerHtml + itemsHtml + footerHtml;
+      itemsContainer.innerHTML = itemsHtml;
+      footerContainer.innerHTML = footerHtml;
     }
 
     function escapeHtml(value) {
