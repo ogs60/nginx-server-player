@@ -261,8 +261,27 @@ function setVisitorCookie(res, deviceId, secure) {
   res.setHeader('Set-Cookie', `bear_device=${encodeURIComponent(deviceId)}; Max-Age=31536000; Path=/; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}`);
 }
 
+function cleanYouTubeUrl(inputUrl) {
+  if (!inputUrl || typeof inputUrl !== 'string') return inputUrl || '';
+  try {
+    const raw = inputUrl.trim();
+    const parsedUrl = new URL(raw);
+    const host = parsedUrl.hostname.toLowerCase();
+    if (host === 'youtu.be' || host === 'www.youtu.be') {
+      const vid = parsedUrl.pathname.replace(/^\/+/, '').split('/')[0];
+      if (vid) return `https://www.youtube.com/watch?v=${vid}`;
+    }
+    if (host.includes('youtube.com')) {
+      const vid = parsedUrl.searchParams.get('v');
+      if (vid) return `https://www.youtube.com/watch?v=${vid}`;
+    }
+  } catch {}
+  return String(inputUrl).trim();
+}
+
 function getYouTubeCacheKey(inputUrl, format) {
-  const keyInput = format === 'mp4' ? `${inputUrl}\nmp4` : inputUrl;
+  const cleanUrl = cleanYouTubeUrl(inputUrl);
+  const keyInput = format === 'mp4' ? `${cleanUrl}\nmp4` : cleanUrl;
   return crypto.createHash('sha256').update(keyInput).digest('hex');
 }
 
@@ -447,7 +466,9 @@ const server = http.createServer((req, res) => {
       currentVisitorNumber = 1;
     }
     
-    const htmlContent = getHTMLContent(startTime, currentVisitorNumber, startDateStr);
+    const ua = req.headers['user-agent'] || '';
+    const isApp = /BearMusicApp|WebIntoApp/i.test(ua);
+    const htmlContent = getHTMLContent(startTime, currentVisitorNumber, startDateStr, isApp);
     
     res.writeHead(200, {
       'Content-Type': 'text/html; charset=utf-8',
@@ -552,9 +573,9 @@ const server = http.createServer((req, res) => {
   }
 });
 
-function getHTMLContent(startTime, visitorCount, startDate) {
+function getHTMLContent(startTime, visitorCount, startDate, isApp = false) {
   return `<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN"${isApp ? ' class="is-app"' : ''}>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
@@ -565,7 +586,24 @@ function getHTMLContent(startTime, visitorCount, startDate) {
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <script>
+    (function() {
+      var ua = navigator.userAgent || '';
+      var isAppClient = /BearMusicApp|WebIntoApp/i.test(ua) || !!window.AndroidBridge || !!window.Android;
+      if (isAppClient) {
+        document.documentElement.classList.add('is-app');
+      }
+    })();
+  </script>
   <style>
+    /* App 客户端专用纯净播放模式：隐藏 URL 粘贴与本地上传控件，保留纯粹听歌体验 */
+    html.is-app #uploadSection,
+    body.is-app #uploadSection {
+      display: none !important;
+    }
+    html.is-app #playlist {
+      margin-bottom: 0 !important;
+    }
     *, *:before, *:after {
       box-sizing: border-box;
     }
@@ -1081,35 +1119,37 @@ function getHTMLContent(startTime, visitorCount, startDate) {
           </div>
         </div>
         <div id="playlist" style="background:#fff;padding:10px;border-radius:4px;margin-bottom:15px;font-size:13px;color:#555;display:none;"></div>
-        <div class="loading" id="loading">⏳ 正在获取音频链接...</div>
-        <div class="progress-wrap" id="progressWrap">
-          <div class="progress-bar"><div class="progress-value" id="progressValue"></div></div>
-          <div class="progress-text" id="progressText">等待加载</div>
-        </div>
-        
-        <div style="margin-bottom: 15px;">
-          <label for="urlInput">URL (支持 YouTube、MP3、MP4 等)：</label>
-          <input 
-            type="text" 
-            id="urlInput" 
-            class="url-input" 
-            placeholder="粘贴音乐/视频 URL"
-          >
-        </div>
-        <div style="margin-bottom: 15px;">
-          <label for="youtubeFormat">YouTube 下载格式：</label>
-          <select id="youtubeFormat" class="url-input">
-            <option value="mp3">MP3 音频</option>
-            <option value="mp4">MP4 视频（优先 720p，最佳音轨）</option>
-          </select>
-        </div>
-        
-        <div class="button-group">
-          <button id="loadBtn" onclick="loadFromUrl()">加载</button>
-          <button type="button" onclick="document.getElementById('fileInput').click()" style="margin: 0; flex: 1;">
-            📁 本地上传
-          </button>
-          <input type="file" id="fileInput" class="file-input" accept="audio/*,video/*" multiple onchange="loadFromFiles(event)">
+        <div id="uploadSection" class="upload-section"${isApp ? ' style="display:none;"' : ''}>
+          <div class="loading" id="loading">⏳ 正在获取音频链接...</div>
+          <div class="progress-wrap" id="progressWrap">
+            <div class="progress-bar"><div class="progress-value" id="progressValue"></div></div>
+            <div class="progress-text" id="progressText">等待加载</div>
+          </div>
+          
+          <div style="margin-bottom: 15px;">
+            <label for="urlInput">URL (支持 YouTube、MP3、MP4 等)：</label>
+            <input 
+              type="text" 
+              id="urlInput" 
+              class="url-input" 
+              placeholder="粘贴音乐/视频 URL"
+            >
+          </div>
+          <div style="margin-bottom: 15px;">
+            <label for="youtubeFormat">YouTube 下载格式：</label>
+            <select id="youtubeFormat" class="url-input">
+              <option value="mp3">MP3 音频</option>
+              <option value="mp4">MP4 视频（优先 720p，最佳音轨）</option>
+            </select>
+          </div>
+          
+          <div class="button-group">
+            <button id="loadBtn" onclick="loadFromUrl()">加载</button>
+            <button type="button" onclick="document.getElementById('fileInput').click()" style="margin: 0; flex: 1;">
+              📁 本地上传
+            </button>
+            <input type="file" id="fileInput" class="file-input" accept="audio/*,video/*" multiple onchange="loadFromFiles(event)">
+          </div>
         </div>
         
       </div>
@@ -1133,6 +1173,19 @@ function getHTMLContent(startTime, visitorCount, startDate) {
     const loadBtn = document.getElementById('loadBtn');
     const urlInput = document.getElementById('urlInput');
     const youtubeFormat = document.getElementById('youtubeFormat');
+    
+    function syncAppMode() {
+      const ua = navigator.userAgent || '';
+      const isAppClient = /BearMusicApp|WebIntoApp/i.test(ua) || !!window.AndroidBridge || !!window.Android;
+      if (isAppClient) {
+        document.documentElement.classList.add('is-app');
+        if (document.body) document.body.classList.add('is-app');
+        const uploadSec = document.getElementById('uploadSection');
+        if (uploadSec) uploadSec.style.display = 'none';
+      }
+    }
+    syncAppMode();
+    window.addEventListener('DOMContentLoaded', syncAppMode);
     
     let currentPlayer = null;
     let playlistItems = [];
@@ -4249,15 +4302,16 @@ async function handleGetAudioUrl(req, res) {
   req.on('end', async () => {
     try {
       const data = JSON.parse(body);
-      const inputUrl = data.url;
+      const inputUrl = cleanYouTubeUrl(data.url);
       const format = getYouTubeFormat(data.format);
       if (!validateYouTubeUrl(inputUrl) || !format) throw new Error('Invalid YouTube URL or format');
       let title = '';
       try {
         const ytArgs = [
-          '--socket-timeout', '30',
+          '--socket-timeout', '35',
           '--no-warnings',
           '--no-playlist',
+          '--extractor-args', 'youtube:player_client=android,web',
           '--print', '%(title)s',
           '--skip-download'
         ];
@@ -4331,24 +4385,48 @@ const DOWNLOAD_TASKS = new Map();
 function startDownload(inputUrl, key, cachePath, format) {
   if (DOWNLOAD_TASKS.has(key)) return DOWNLOAD_TASKS.get(key);
   const task = new Promise((resolve, reject) => {
+    const targetUrl = cleanYouTubeUrl(inputUrl);
     const tempPath = format === 'mp4' ? cachePath + '.download.mp4' : cachePath + '.part';
     try { fs.unlinkSync(tempPath); } catch {}
     const { spawn } = require('child_process');
-    const ytArgs = ['--socket-timeout', '30', '--no-warnings', '--no-playlist', '--newline'];
-    if (format === 'mp4') {
-      ytArgs.push('--concurrent-fragments', '4', '-f', 'bv[height<=720]+ba/bv+ba', '--merge-output-format', 'mp4', '--remux-video', 'mp4', '-o', tempPath, inputUrl);
-    } else {
-      ytArgs.push('-f', 'bestaudio', '-o', '-', inputUrl);
-    }
     const cookiesPath = getYouTubeCookiesPath();
-    if (cookiesPath) ytArgs.unshift('--cookies', cookiesPath);
     const curProxy = getYouTubeProxy();
-    if (curProxy) ytArgs.unshift('--proxy', curProxy);
     let attempts = 0;
     const run = () => {
       attempts++;
       DOWNLOAD_PROGRESS.set(key, { status: 'loading', percent: 0, attempt: attempts });
-      console.log(`[cache] ${format.toUpperCase()} download started (key=${key.slice(0, 12)}, attempt=${attempts}/3${cookiesPath ? ', cookies=yes' : ''})`);
+
+      const ytArgs = ['--socket-timeout', '35', '--no-warnings', '--no-playlist', '--newline'];
+      const useCookies = Boolean(cookiesPath && attempts === 1);
+      if (useCookies && cookiesPath) ytArgs.unshift('--cookies', cookiesPath);
+      if (curProxy) ytArgs.unshift('--proxy', curProxy);
+
+      if (attempts === 1) {
+        ytArgs.push('--extractor-args', 'youtube:player_client=android,web');
+        if (format === 'mp4') {
+          ytArgs.push('--concurrent-fragments', '4', '-f', 'bv[height<=720]+ba/bv+ba', '--merge-output-format', 'mp4', '--remux-video', 'mp4', '-o', tempPath, targetUrl);
+        } else {
+          ytArgs.push('-f', 'ba[ext=m4a]/ba[ext=webm]/bestaudio/best', '-o', '-', targetUrl);
+        }
+      } else if (attempts === 2) {
+        // 第 2 次尝试：不带 cookies（防止 cookie 过期导致 403），强制使用 android 客户端与 m4a 音轨
+        ytArgs.push('--extractor-args', 'youtube:player_client=android');
+        if (format === 'mp4') {
+          ytArgs.push('-f', 'bv[height<=720]+ba/best', '--merge-output-format', 'mp4', '-o', tempPath, targetUrl);
+        } else {
+          ytArgs.push('-f', 'ba[ext=m4a]/bestaudio/best', '-o', '-', targetUrl);
+        }
+      } else {
+        // 第 3 次尝试：混合客户端与最佳可用流
+        ytArgs.push('--extractor-args', 'youtube:player_client=android_creator,android,web');
+        if (format === 'mp4') {
+          ytArgs.push('-f', 'best', '-o', tempPath, targetUrl);
+        } else {
+          ytArgs.push('-f', 'bestaudio/best', '-o', '-', targetUrl);
+        }
+      }
+
+      console.log(`[cache] ${format.toUpperCase()} download started (key=${key.slice(0, 12)}, attempt=${attempts}/3${useCookies ? ', cookies=yes' : ''})`);
       const yt = spawn('yt-dlp', ytArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
       const ffmpeg = format === 'mp3'
         ? spawn('ffmpeg', ['-i', 'pipe:0', '-f', 'mp3', '-q:a', '5', tempPath], { stdio: ['pipe', 'ignore', 'pipe'] })
@@ -4375,10 +4453,10 @@ function startDownload(inputUrl, key, cachePath, format) {
         if (downloaded) {
           fs.rename(tempPath, cachePath, error => {
             if (error) return reject(error);
-            writeCacheMetadataEntry(key, { url: inputUrl }).then(() => {
+            writeCacheMetadataEntry(key, { url: targetUrl }).then(() => {
               DOWNLOAD_PROGRESS.set(key, { status: 'complete', percent: 100 });
               console.log(`[cache] ${format.toUpperCase()} download completed (key=${key.slice(0, 12)}, size=${fs.statSync(cachePath).size} bytes)`);
-              fetchYouTubeSubtitles(inputUrl, key).catch(err => {
+              fetchYouTubeSubtitles(targetUrl, key).catch(err => {
                 console.warn(`[lyrics] Subtitle auto-fetch notice for ${key.slice(0, 10)}:`, err.message);
               });
               resolve(cachePath);
@@ -4417,7 +4495,8 @@ function sendCachedAudio(req, res, cachePath) {
 }
 
 async function handlePreload(url, req, res) {
-  const inputUrl = url.searchParams.get('url') || '';
+  const rawInputUrl = url.searchParams.get('url') || '';
+  const inputUrl = cleanYouTubeUrl(rawInputUrl);
   if (!validateYouTubeUrl(inputUrl)) { res.writeHead(400); res.end('Invalid YouTube URL'); return; }
   const format = getYouTubeFormat(url.searchParams.get('format'));
   if (!format) { res.writeHead(400); res.end('Invalid format'); return; }
@@ -4429,7 +4508,8 @@ async function handlePreload(url, req, res) {
 }
 
 async function handleYouTubeAudio(url, req, res) {
-  const inputUrl = url.searchParams.get('url') || '';
+  const rawInputUrl = url.searchParams.get('url') || '';
+  const inputUrl = cleanYouTubeUrl(rawInputUrl);
   if (!validateYouTubeUrl(inputUrl)) { res.writeHead(400); res.end('Invalid YouTube URL'); return; }
   const format = getYouTubeFormat(url.searchParams.get('format'));
   if (!format) { res.writeHead(400); res.end('Invalid format'); return; }
