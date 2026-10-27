@@ -81,11 +81,26 @@ let _metadataCache = null;
 let _metadataCacheTime = 0;
 const METADATA_CACHE_TTL = 5000; // 5秒 TTL，写入后立即失效
 
-// P2: 定时清理过期在线访客，避免每次请求遍历
+// P2: 定时清理过期在线访客，结算并持久化本次会话在线时长，避免每次请求遍历
 setInterval(() => {
   const now = Date.now();
-  for (const [id, lastSeen] of ONLINE_VISITORS) {
-    if (now - lastSeen >= ONLINE_VISITOR_TIMEOUT) ONLINE_VISITORS.delete(id);
+  for (const [id, session] of ONLINE_VISITORS) {
+    const lastSeen = (typeof session === 'object' && session) ? session.lastSeen : session;
+    if (now - lastSeen >= ONLINE_VISITOR_TIMEOUT) {
+      try {
+        const date = getShanghaiDate();
+        const visitors = readVisitorData();
+        const existing = visitors.days && visitors.days[date] && visitors.days[date][id];
+        if (existing && typeof session === 'object' && session && session.sessionStart) {
+          const duration = Math.round((lastSeen - session.sessionStart) / 1000);
+          if (duration > 0) existing.sessionDuration = duration;
+          writeVisitorData(visitors);
+        }
+      } catch (e) {
+        console.warn('Session end record warning:', e.message);
+      }
+      ONLINE_VISITORS.delete(id);
+    }
   }
 }, 30000);
 
@@ -300,6 +315,17 @@ function getClientVisitor(req, res) {
   const userAgent = String(req.headers['user-agent'] || '').trim();
   const clientInfo = parseClientInfo(userAgent);
   const nowIso = new Date().toISOString();
+  const nowMs = Date.now();
+
+  let session = ONLINE_VISITORS.get(visitorId);
+  const lastSeenMs = (typeof session === 'object' && session) ? session.lastSeen : (session || 0);
+  if (!session || (nowMs - lastSeenMs >= ONLINE_VISITOR_TIMEOUT)) {
+    session = { sessionStart: nowMs, lastSeen: nowMs };
+  } else {
+    session.lastSeen = nowMs;
+    if (!session.sessionStart) session.sessionStart = nowMs;
+  }
+  ONLINE_VISITORS.set(visitorId, session);
 
   const existing = dayVisitors[visitorId];
 
@@ -307,6 +333,8 @@ function getClientVisitor(req, res) {
     dayVisitors[visitorId] = {
       firstSeen: nowIso,
       lastSeen: nowIso,
+      sessionStart: new Date(session.sessionStart).toISOString(),
+      sessionDuration: Math.max(1, Math.round((nowMs - session.sessionStart) / 1000)),
       visitCount: 1,
       ip,
       client: clientInfo.client,
@@ -323,6 +351,8 @@ function getClientVisitor(req, res) {
     let dirty = false;
     existing.visitCount = (existing.visitCount || 1) + 1;
     existing.lastSeen = nowIso;
+    existing.sessionStart = new Date(session.sessionStart).toISOString();
+    existing.sessionDuration = Math.max(1, Math.round((nowMs - session.sessionStart) / 1000));
     dirty = true;
 
     if (ip && existing.ip !== ip) {
@@ -366,9 +396,19 @@ function getClientVisitor(req, res) {
 }
 
 function handleOnlineVisitors(req, res) {
-  // P2: 过期清理已由定时器负责，接口只需更新当前访客并返回数量
+  // P2: 过期清理已由定时器负责，接口更新当前访客并维护本次在线会话时长
   const { deviceId, visitorId, secure } = getVisitorIdentity(req);
-  ONLINE_VISITORS.set(visitorId, Date.now());
+  const now = Date.now();
+  let session = ONLINE_VISITORS.get(visitorId);
+  const lastSeenMs = (typeof session === 'object' && session) ? session.lastSeen : (session || 0);
+
+  if (!session || (now - lastSeenMs >= ONLINE_VISITOR_TIMEOUT)) {
+    session = { sessionStart: now, lastSeen: now };
+  } else {
+    session.lastSeen = now;
+    if (!session.sessionStart) session.sessionStart = now;
+  }
+  ONLINE_VISITORS.set(visitorId, session);
   setVisitorCookie(res, deviceId, secure);
 
   // 保证在线访客完成今日登记（兜底根路径可能被离线/客户端强缓存跳过登记的情况）
@@ -381,11 +421,12 @@ function handleOnlineVisitors(req, res) {
       getClientVisitor(req, null);
     } else {
       const existing = dayVisitors[visitorId];
-      const now = Date.now();
       const last = new Date(existing.lastSeen || existing.firstSeen || 0).getTime();
-      // 心跳超过 3 分钟更新一次持久化活跃时间
-      if (now - last > 3 * 60 * 1000) {
+      // 心跳超过 3 分钟或者初次记录时更新持久化活跃时间与本次时长
+      if (now - last > 3 * 60 * 1000 || !existing.sessionStart) {
         existing.lastSeen = new Date().toISOString();
+        existing.sessionStart = new Date(session.sessionStart).toISOString();
+        existing.sessionDuration = Math.max(1, Math.round((now - session.sessionStart) / 1000));
         writeVisitorData(visitors);
       }
     }
@@ -408,7 +449,31 @@ function handleVisitorsList(req, res, url) {
       const item = rawItem || {};
       const userAgent = item.userAgent || '';
       const fallbackInfo = parseClientInfo(userAgent);
-      const isOnline = ONLINE_VISITORS.has(id) && (now - ONLINE_VISITORS.get(id) < ONLINE_VISITOR_TIMEOUT);
+
+      const session = ONLINE_VISITORS.get(id);
+      const sessionLastSeen = (typeof session === 'object' && session) ? session.lastSeen : (session || 0);
+      const isOnline = ONLINE_VISITORS.has(id) && (now - sessionLastSeen < ONLINE_VISITOR_TIMEOUT);
+
+      let sessionStartMs = 0;
+      let onlineDurationSeconds = 0;
+
+      if (isOnline) {
+        if (session && session.sessionStart) {
+          sessionStartMs = session.sessionStart;
+        } else if (item.sessionStart) {
+          sessionStartMs = new Date(item.sessionStart).getTime();
+        } else {
+          sessionStartMs = new Date(item.lastSeen || item.firstSeen || now).getTime();
+        }
+        onlineDurationSeconds = Math.max(1, Math.round((now - sessionStartMs) / 1000));
+      } else {
+        if (item.sessionDuration) {
+          onlineDurationSeconds = Math.max(1, Number(item.sessionDuration));
+        } else if (item.firstSeen && item.lastSeen) {
+          const diff = Math.round((new Date(item.lastSeen) - new Date(item.firstSeen)) / 1000);
+          onlineDurationSeconds = Math.max(1, diff);
+        }
+      }
 
       return {
         id: id.substring(0, 16),
@@ -420,6 +485,8 @@ function handleVisitorsList(req, res, url) {
         isApp: typeof item.isApp === 'boolean' ? item.isApp : fallbackInfo.isApp,
         firstSeen: item.firstSeen || '',
         lastSeen: item.lastSeen || item.firstSeen || '',
+        sessionStart: sessionStartMs ? new Date(sessionStartMs).toISOString() : (item.sessionStart || ''),
+        onlineDurationSeconds,
         visitCount: item.visitCount || 1,
         username: item.username || '',
         email: item.email || '',
@@ -428,7 +495,10 @@ function handleVisitorsList(req, res, url) {
       };
     });
 
-    list.sort((a, b) => new Date(b.lastSeen || 0) - new Date(a.lastSeen || 0));
+    list.sort((a, b) => {
+      if (a.isOnline !== b.isOnline) return b.isOnline ? 1 : -1;
+      return new Date(b.lastSeen || 0) - new Date(a.lastSeen || 0);
+    });
 
     const availableDates = Object.keys(visitors.days || {}).sort().reverse();
     if (!availableDates.includes(queryDate)) {
@@ -3082,7 +3152,7 @@ function getManageHTMLContent() {
       </div>
       <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
         <button type="button" class="btn btn-primary" onclick="openVisitorModal()" style="background: linear-gradient(135deg, #38a169, #2f855a); padding: 8px 14px; font-size: 13px; box-shadow: 0 2px 6px rgba(56, 161, 105, 0.25);">
-          👥 访客记录 (<span id="headerVisitorBadge">0</span>)
+          👥 用户管理与访客 (<span id="headerVisitorBadge">0</span>)
         </button>
         <a href="/" class="back-btn">◀ 返回播放器</a>
       </div>
@@ -3643,17 +3713,28 @@ function getManageHTMLContent() {
         .catch(() => {});
     }
 
+    let visitorModalTimer = null;
     function openVisitorModal(date) {
       const modal = document.getElementById('visitorModal');
       if (modal) {
         modal.style.display = 'flex';
         loadVisitorRecords(date);
+        if (visitorModalTimer) clearInterval(visitorModalTimer);
+        visitorModalTimer = setInterval(function() {
+          if (modal.style.display !== 'none') {
+            loadVisitorRecords();
+          }
+        }, 10000);
       }
     }
 
     function closeVisitorModal() {
       const modal = document.getElementById('visitorModal');
       if (modal) modal.style.display = 'none';
+      if (visitorModalTimer) {
+        clearInterval(visitorModalTimer);
+        visitorModalTimer = null;
+      }
     }
 
     function formatTimeFriendly(isoStr) {
@@ -3665,6 +3746,19 @@ function getManageHTMLContent() {
       } catch {
         return isoStr;
       }
+    }
+
+    function formatDurationFriendly(sec) {
+      sec = Math.max(0, parseInt(sec, 10) || 0);
+      if (sec < 60) return (sec || 1) + ' 秒';
+      const mins = Math.floor(sec / 60);
+      const remSec = sec % 60;
+      if (mins < 60) {
+        return remSec ? (mins + ' 分 ' + remSec + ' 秒') : (mins + ' 分钟');
+      }
+      const hrs = Math.floor(mins / 60);
+      const remMins = mins % 60;
+      return remMins ? (hrs + ' 小时 ' + remMins + ' 分') : (hrs + ' 小时');
     }
 
     function loadVisitorRecords(date) {
@@ -3702,7 +3796,7 @@ function getManageHTMLContent() {
 
           const tbody = document.getElementById('visitorTableBody');
           if (!data.visitors || data.visitors.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="7" style="padding: 30px; text-align: center; color: #a0aec0;">暂无访客记录</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="8" style="padding: 30px; text-align: center; color: #a0aec0;">暂无访客记录</td></tr>';
             return;
           }
 
@@ -3710,6 +3804,18 @@ function getManageHTMLContent() {
             const onlineBadge = v.isOnline
               ? '<span style="display:inline-flex; align-items:center; gap:4px; color:#2f855a; font-weight:600;"><span style="width:8px; height:8px; background:#48bb78; border-radius:50%; display:inline-block;"></span>在线</span>'
               : '<span style="color:#a0aec0;">⚪ 离线</span>';
+
+            let onlineDurationCol = '';
+            if (v.isOnline) {
+              onlineDurationCol = '<div style="display:inline-flex; align-items:center; gap:4px; color:#22543d; background:#f0fff4; border:1px solid #c6f6d5; padding:3px 8px; border-radius:12px; font-weight:600; font-size:11px;" title="当前持续在线中">' +
+                '<span style="width:6px; height:6px; background:#38a169; border-radius:50%; display:inline-block;"></span>' +
+                formatDurationFriendly(v.onlineDurationSeconds) +
+                '</div>';
+            } else {
+              onlineDurationCol = '<span style="color:#718096; font-size:11px;" title="本次/最近一次在线时长">' +
+                (v.onlineDurationSeconds ? ('上次 ' + formatDurationFriendly(v.onlineDurationSeconds)) : '-') +
+                '</span>';
+            }
 
             const clientTag = v.isApp
               ? '<span style="background:linear-gradient(135deg, #667eea, #764ba2); color:#fff; border-radius:4px; padding:2px 6px; font-size:11px; font-weight:600;">🐻 熊宝宝App</span>'
@@ -3728,6 +3834,7 @@ function getManageHTMLContent() {
 
             return '<tr class="visitor-row" style="border-bottom: 1px solid #f0f2f5;">' +
               '<td style="padding: 8px;">' + onlineBadge + '</td>' +
+              '<td style="padding: 8px;">' + onlineDurationCol + '</td>' +
               '<td style="padding: 8px; font-family: monospace; font-size: 12px; color: #2d3748;"><strong>' + escapeHtml(v.ip) + '</strong></td>' +
               '<td style="padding: 8px;">' +
                 '<div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">' +
@@ -3772,9 +3879,10 @@ function getManageHTMLContent() {
   <div id="visitorModal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)closeVisitorModal()">
     <div class="modal-content" style="max-width: 980px; width: 95%; max-height: 90vh; display: flex; flex-direction: column;">
       <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #e2e8f0; padding-bottom: 12px; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
-        <div style="display: flex; align-items: center; gap: 10px;">
-          <h2 style="margin: 0; font-size: 18px; color: #2d3748;">👥 访客记录与客户端登记</h2>
+        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+          <h2 style="margin: 0; font-size: 18px; color: #2d3748;">👥 用户管理与访客记录</h2>
           <select id="visitorDateSelect" onchange="loadVisitorRecords(this.value)" style="padding: 4px 10px; border-radius: 6px; border: 1.5px solid #cbd5e0; font-size: 13px; font-weight: 600; color: #4a5568; outline: none; background: #fff; cursor: pointer;"></select>
+          <button type="button" class="btn btn-secondary" onclick="loadVisitorRecords()" style="padding: 4px 10px; font-size: 12px;" title="刷新访客数据与实时在线时长">🔄 刷新</button>
         </div>
         <button type="button" class="btn btn-secondary" onclick="closeVisitorModal()" style="padding: 4px 10px; font-size: 16px; line-height: 1;">✕</button>
       </div>
@@ -3803,17 +3911,18 @@ function getManageHTMLContent() {
           <thead style="background: #f7fafc; position: sticky; top: 0; z-index: 10; border-bottom: 1.5px solid #e2e8f0;">
             <tr>
               <th style="padding: 10px 8px; width: 65px;">状态</th>
-              <th style="padding: 10px 8px; width: 140px;">IP 地址</th>
+              <th style="padding: 10px 8px; width: 115px;">本次在线多久</th>
+              <th style="padding: 10px 8px; width: 130px;">IP 地址</th>
               <th style="padding: 10px 8px;">客户端标识</th>
-              <th style="padding: 10px 8px; width: 130px;">平台 / 设备</th>
-              <th style="padding: 10px 8px; width: 140px;">身份认证</th>
-              <th style="padding: 10px 8px; width: 140px;">首次/最近活跃</th>
-              <th style="padding: 10px 8px; width: 55px; text-align: center;">频次</th>
+              <th style="padding: 10px 8px; width: 120px;">平台 / 设备</th>
+              <th style="padding: 10px 8px; width: 130px;">身份认证</th>
+              <th style="padding: 10px 8px; width: 135px;">首次/最近活跃</th>
+              <th style="padding: 10px 8px; width: 50px; text-align: center;">频次</th>
             </tr>
           </thead>
           <tbody id="visitorTableBody">
             <tr>
-              <td colspan="7" style="padding: 30px; text-align: center; color: #a0aec0;">⏳ 加载访客数据中...</td>
+              <td colspan="8" style="padding: 30px; text-align: center; color: #a0aec0;">⏳ 加载访客数据中...</td>
             </tr>
           </tbody>
         </table>
