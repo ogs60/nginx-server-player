@@ -77,6 +77,34 @@ const startDateStr = new Date(startTime).toLocaleString('zh-CN', { timeZone: 'As
 let visitorCount = 0;
 
 // P1: metadata 内存缓存，避免每次请求都读磁盘
+
+/**
+ * Get or create a session object for a visitor.
+ * Updates `lastSeen` and initializes `sessionStart` if missing.
+ * Centralizes the duplicated logic from `getClientVisitor` and `handleOnlineVisitors`.
+ */
+function getOrCreateSession(visitorId) {
+  const now = Date.now();
+  let session = ONLINE_VISITORS.get(visitorId);
+  const lastSeenMs = (typeof session === 'object' && session) ? session.lastSeen : (session || 0);
+  if (!session || (now - lastSeenMs >= ONLINE_VISITOR_TIMEOUT)) {
+    session = { sessionStart: now, lastSeen: now };
+  } else {
+    session.lastSeen = now;
+    if (!session.sessionStart) session.sessionStart = now;
+  }
+  ONLINE_VISITORS.set(visitorId, session);
+  return session;
+}
+
+/** Simple template tag for building HTML strings.
+ * Example: const row = tmpl`<tr><td>${id}</td></tr>`;
+ */
+function tmpl(strings, ...values) {
+  return strings.reduce((acc, s, i) => acc + s + (values[i] !== undefined ? values[i] : ''), '');
+}
+
+// P1: metadata 内存缓存，避免每次请求都读磁盘
 let _metadataCache = null;
 let _metadataCacheTime = 0;
 const METADATA_CACHE_TTL = 5000; // 5秒 TTL，写入后立即失效
@@ -317,15 +345,7 @@ function getClientVisitor(req, res) {
   const nowIso = new Date().toISOString();
   const nowMs = Date.now();
 
-  let session = ONLINE_VISITORS.get(visitorId);
-  const lastSeenMs = (typeof session === 'object' && session) ? session.lastSeen : (session || 0);
-  if (!session || (nowMs - lastSeenMs >= ONLINE_VISITOR_TIMEOUT)) {
-    session = { sessionStart: nowMs, lastSeen: nowMs };
-  } else {
-    session.lastSeen = nowMs;
-    if (!session.sessionStart) session.sessionStart = nowMs;
-  }
-  ONLINE_VISITORS.set(visitorId, session);
+  const session = getOrCreateSession(visitorId);
 
   const existing = dayVisitors[visitorId];
 
@@ -399,16 +419,7 @@ function handleOnlineVisitors(req, res) {
   // P2: 过期清理已由定时器负责，接口更新当前访客并维护本次在线会话时长
   const { deviceId, visitorId, secure } = getVisitorIdentity(req);
   const now = Date.now();
-  let session = ONLINE_VISITORS.get(visitorId);
-  const lastSeenMs = (typeof session === 'object' && session) ? session.lastSeen : (session || 0);
-
-  if (!session || (now - lastSeenMs >= ONLINE_VISITOR_TIMEOUT)) {
-    session = { sessionStart: now, lastSeen: now };
-  } else {
-    session.lastSeen = now;
-    if (!session.sessionStart) session.sessionStart = now;
-  }
-  ONLINE_VISITORS.set(visitorId, session);
+  const session = getOrCreateSession(visitorId);
   setVisitorCookie(res, deviceId, secure);
 
   // 保证在线访客完成今日登记（兜底根路径可能被离线/客户端强缓存跳过登记的情况）
